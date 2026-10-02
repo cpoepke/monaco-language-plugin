@@ -19,9 +19,11 @@ export {
 } from './connection'
 export {
   MARKER_OWNER,
+  SAFE_LINK_SCHEMES,
   fileUriKey,
   fileUriToPath,
   isLspRange,
+  isSafeLinkTarget,
   isSameFileUri,
   lspDiagnosticsToMonacoMarkers,
   lspDocumentLinkToMonaco,
@@ -58,6 +60,7 @@ export {
 export { consoleWarnLogger, type Logger } from './logger'
 export { ModelTracker, type AttachMode } from './model-tracker'
 export {
+  classifyLink,
   resolveEditorOpenTarget,
   resolveLinkOpenTarget,
   type HostAdapter,

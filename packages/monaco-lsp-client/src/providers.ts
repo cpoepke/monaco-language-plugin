@@ -17,6 +17,7 @@ import {
 import type { BridgeConnection } from './connection'
 import { RpcError, errorMessage } from './connection'
 import {
+  isSafeLinkTarget,
   isSameFileUri,
   lspDocumentLinkToMonaco,
   lspDocumentLinksToMonaco,
@@ -317,7 +318,7 @@ export function registerLanguageProviders(ctx: ProviderContext, languageId: stri
   if (features.documentLinks) {
     const toMonacoLink = (link: DocumentLinkShape, sessionId: string): MonacoLink => {
       const result: MonacoLink = { range: link.range, mlp: { sessionId, lspLink: link.lspLink } }
-      if (link.url) {
+      if (isSafeLinkTarget(link.url)) {
         result.url = link.url
       }
       if (link.tooltip) {
@@ -350,8 +351,9 @@ export function registerLanguageProviders(ctx: ProviderContext, languageId: stri
         },
         resolveLink: async (link: MonacoLink, token) => {
           try {
-            if (link.url || !link.mlp) {
-              return link
+            if (link.url !== undefined || !link.mlp) {
+              // Why: Monaco opens links with allowCommands; never hand back an unsafe target.
+              return link.url === undefined || isSafeLinkTarget(String(link.url)) ? link : null
             }
             const params: LspRequestParams = {
               sessionId: link.mlp.sessionId,
@@ -365,6 +367,7 @@ export function registerLanguageProviders(ctx: ProviderContext, languageId: stri
             if (!resolved || typeof resolved !== 'object') {
               return null
             }
+            // lspDocumentLinkToMonaco leaves out unsafe targets, so those resolve to null.
             const shape = lspDocumentLinkToMonaco(resolved as Record<string, unknown>)
             return shape.url
               ? toMonacoLink({ ...shape, range: link.range }, link.mlp.sessionId)

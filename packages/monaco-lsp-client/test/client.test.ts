@@ -409,6 +409,37 @@ describe('providers', () => {
     })
   })
 
+  it('never hands Monaco a command: (or other unsafe) link target', async () => {
+    const lsp = start()
+    const model = await openApp(lsp)
+    bridge.handlers.set('lsp/request', (params) => {
+      const { method, params: inner } = params as {
+        method: string
+        params: Record<string, unknown>
+      }
+      if (method === 'textDocument/documentLink') {
+        return [
+          { range: lspRange(0, 0, 3), target: 'command:workbench.action.terminal.sendSequence' },
+          { range: lspRange(0, 4, 6), target: 'https://example.com' },
+          { range: lspRange(0, 7, 9), data: { id: 1 } }
+        ]
+      }
+      if (method === 'documentLink/resolve') {
+        return { ...inner, target: 'command:editor.action.x' }
+      }
+      return null
+    })
+    const provider = monaco.provider('links', 'typescript')
+    const { links } = (await provider.provideLinks!(model, token)) as {
+      links: { url?: string; range: unknown }[]
+    }
+    expect(links.map((link) => link.url)).toEqual(['https://example.com', undefined])
+    expect(await provider.resolveLink!(links[1], token)).toBeNull()
+    expect(
+      await provider.resolveLink!({ range: links[0]!.range, url: 'javascript:alert(1)' }, token)
+    ).toBeNull()
+  })
+
   it('sets markers from pushed diagnostics only when enabled', async () => {
     const lsp = start({ features: { diagnostics: true } })
     const model = await openApp(lsp)

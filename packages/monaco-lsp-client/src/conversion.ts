@@ -266,6 +266,24 @@ export type DocumentLinkShape = {
   lspLink: Record<string, unknown>
 }
 
+/** URI schemes a server-provided link target may use. */
+export const SAFE_LINK_SCHEMES: readonly string[] = ['file', 'http', 'https']
+
+/**
+ * True when `target` is an absolute URI whose scheme is on SAFE_LINK_SCHEMES.
+ * Why: Monaco opens document links with `allowCommands: true`, so a `command:`
+ * (or `javascript:`, `vscode:`, …) target from a server would run host commands.
+ */
+export function isSafeLinkTarget(target: unknown): target is string {
+  if (typeof target !== 'string') {
+    return false
+  }
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(target)
+  return match !== null && SAFE_LINK_SCHEMES.includes(match[1]!.toLowerCase())
+}
+
+/** Monaco links for a `textDocument/documentLink` result. Links whose target uses an
+ *  unsafe scheme are dropped (not merely stripped, so they are never resolved either). */
 export function lspDocumentLinksToMonaco(result: unknown): DocumentLinkShape[] {
   if (!Array.isArray(result)) {
     return []
@@ -275,11 +293,15 @@ export function lspDocumentLinksToMonaco(result: unknown): DocumentLinkShape[] {
     if (!isRecord(item) || !isLspRange(item.range)) {
       continue
     }
+    if (item.target !== undefined && item.target !== null && !isSafeLinkTarget(item.target)) {
+      continue
+    }
     links.push(lspDocumentLinkToMonaco(item))
   }
   return links
 }
 
+/** One LSP DocumentLink → Monaco shape; an unsafe target is left out (no `url`). */
 export function lspDocumentLinkToMonaco(item: Record<string, unknown>): DocumentLinkShape {
   const link: DocumentLinkShape = {
     range: isLspRange(item.range)
@@ -287,7 +309,7 @@ export function lspDocumentLinkToMonaco(item: Record<string, unknown>): Document
       : { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 },
     lspLink: item
   }
-  if (typeof item.target === 'string' && item.target) {
+  if (isSafeLinkTarget(item.target)) {
     link.url = item.target
   }
   if (typeof item.tooltip === 'string' && item.tooltip) {
