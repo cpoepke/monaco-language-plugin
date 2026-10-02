@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "publisher": "cpoepke",
+  "id": "monaco-lsp",
+  "name": "Code Navigation (LSP)",
+  "version": "0.1.0",
+  "description": "Go to definition, find references, hover and document links in Orca's editor, backed by the language servers installed on your machine (TypeScript/JavaScript, Python, Go, Rust).",
+  "author": { "name": "Conrad Poepke" },
+  "engines": { "orca": ">=1.4.214" },
+  "pluginApi": 1,
+  "main": "dist/main.mjs",
+  "contributes": {
+    "commands": [
+      { "id": "mlp.ensureBridge", "title": "Language Servers: Start / Get Connection" },
+      { "id": "mlp.status", "title": "Language Servers: Status" },
+      { "id": "mlp.restart", "title": "Language Servers: Restart" },
+      { "id": "mlp.stop", "title": "Language Servers: Stop" }
+    ]
+  },
+  "capabilities": [{ "kind": "notifications:show" }]
+}

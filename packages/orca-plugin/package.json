@@ -1,0 +1,22 @@
+{
+  "name": "@mlp/orca-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Orca plugin whose worker runs the language-server bridge and opens files through Orca's runtime RPC.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/main.mjs",
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json",
+    "pack": "pnpm run build && node scripts/pack.mjs"
+  },
+  "dependencies": {
+    "@mlp/lsp-bridge": "workspace:*",
+    "@mlp/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "zod": "~4.6.5"
+  }
+}
