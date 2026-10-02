@@ -80,6 +80,22 @@ importers:
         specifier: ^8.18.3
         version: 8.22.0
 
+  packages/orca-plugin:
+    dependencies:
+      '@mlp/lsp-bridge':
+        specifier: workspace:*
+        version: link:../lsp-bridge
+      '@mlp/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      zod:
+        specifier: ~4.6.5
+        version: 4.6.5
+
   packages/protocol: {}
 
 packages:
@@ -1066,6 +1082,9 @@ packages:
       utf-8-validate:
         optional: true
 
+  zod@4.6.5:
+    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+
 snapshots:
 
   '@esbuild/aix-ppc64@0.27.7':
@@ -1779,3 +1798,5 @@ snapshots:
       stackback: 0.0.2
 
   ws@8.22.0: {}
+
+  zod@4.6.5: {}
