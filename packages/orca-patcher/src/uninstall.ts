@@ -90,7 +90,9 @@ export async function uninstall(options: UninstallOptions = {}): Promise<Uninsta
     if (target.appBundle && ctx.platform === 'darwin') {
       await adHocSign(ctx, target.appBundle)
       logger.info(
-        'macOS: Orca.app was re-signed ad hoc. Download Orca again to get the original signature back.'
+        'macOS: Orca.app is still ad-hoc signed (app.asar is restored, the Developer ID signature is ' +
+          'not). Reinstall Orca from the official download to fully revert, including keychain ' +
+          'access, privacy (TCC) grants and auto-update.'
       )
     }
   }
