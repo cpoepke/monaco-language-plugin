@@ -123,6 +123,25 @@ describe('injector boot', () => {
     await expect(options[1]!.url()).resolves.toBe('ws://127.0.0.1:5000/?token=other')
   })
 
+  it('keeps the plugin worker alive while Orca is hidden and the client is connected', async () => {
+    const invokeCommand = vi.fn(async () => bridge())
+    const { g, clients, options } = setup({ api: { plugins: { invokeCommand } } })
+    g.monaco = fakeMonaco()
+    await options[0]!.url()
+    const calls = invokeCommand.mock.calls.length
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    try {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(240_000)
+      expect(invokeCommand).toHaveBeenCalledTimes(calls + 2)
+      clients[0]!.connection = 'disconnected'
+      await vi.advanceTimersByTimeAsync(240_000)
+      expect(invokeCommand).toHaveBeenCalledTimes(calls + 2)
+    } finally {
+      visibility.mockRestore()
+    }
+  })
+
   it('cross-file navigation goes through host/openLocation', async () => {
     const invokeCommand = vi.fn(async () => bridge())
     const { g, clients, options } = setup({ api: { plugins: { invokeCommand } } })

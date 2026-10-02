@@ -5,7 +5,7 @@ export const ENSURE_BRIDGE_COMMAND = 'mlp.ensureBridge'
 /** Backoff for retrying ensureBridge after a failure: 5 s doubling up to 2 min. */
 export const RETRY_INITIAL_MS = 5_000
 export const RETRY_MAX_MS = 120_000
-/** Re-invoke ensureBridge this often while visible (Orca reaps idle plugin workers after 5 min). */
+/** Re-invoke ensureBridge this often while in use (Orca reaps idle plugin workers after 5 min). */
 export const HEARTBEAT_MS = 120_000
 /** Reuse a successful ensureBridge result for this long when the client asks for its URL. */
 export const FRESH_MS = 5_000
@@ -51,8 +51,14 @@ export type ConnectorDeps = {
   now(): number
   setTimeout(fn: () => void, ms: number): unknown
   clearTimeout(handle: unknown): void
-  /** True while the window is visible (heartbeats pause while hidden). */
+  /** True while the window is visible. */
   isVisible(): boolean
+  /**
+   * True while the LSP client is connected to the bridge. Heartbeats continue while connected even
+   * when the window is hidden (a reaped worker takes every language server with it); they pause
+   * only when hidden and disconnected.
+   */
+  isClientConnected?(): boolean
   log?(message: string): void
 }
 
@@ -135,8 +141,8 @@ export function noticeFor(error: BridgeError): { title: string; body: string } {
 
 /**
  * Wakes the plugin worker through Orca's plugin API (`mlp.ensureBridge`) and tracks the bridge
- * endpoint. Retries with backoff while unavailable, and heartbeats while the window is visible so
- * Orca does not reap the idle worker.
+ * endpoint. Retries with backoff while unavailable, and heartbeats while the window is visible or
+ * the client is connected so Orca does not reap the idle worker.
  */
 export class BridgeConnector {
   state: ConnectorState = 'idle'
@@ -252,14 +258,23 @@ export class BridgeConnector {
 
   private heartbeat(): void {
     if (this.disposed) return
-    if (!this.deps.isVisible()) {
-      // Paused while hidden; handleVisibilityChange catches up.
-      this.heartbeatTimer = null
+    if (!this.deps.isVisible() && !this.isClientConnected()) {
+      // Paused while hidden and disconnected: skip this beat but keep checking, so a client that
+      // reconnects while hidden is kept alive too; handleVisibilityChange catches up on show.
+      this.scheduleHeartbeat(HEARTBEAT_MS)
       return
     }
     this.lastHeartbeat = this.deps.now()
     void this.refresh(0).catch(() => {})
     this.scheduleHeartbeat(HEARTBEAT_MS)
+  }
+
+  private isClientConnected(): boolean {
+    try {
+      return this.deps.isClientConnected?.() === true
+    } catch {
+      return false
+    }
   }
 
   private scheduleHeartbeat(ms: number): void {
