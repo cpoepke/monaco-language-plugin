@@ -1,6 +1,7 @@
 // Copies the build outputs the patcher installs into `assets/`:
 //   assets/injector.js                      ← packages/orca-injector/dist/injector.js (required)
 //   assets/plugin/cpoepke.monaco-lsp/       ← packages/orca-plugin/release/cpoepke.monaco-lsp (optional)
+import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +22,15 @@ if (!existsSync(injector)) {
 }
 cpSync(injector, join(assets, 'injector.js'))
 console.log('copy-assets: injector.js')
+
+// The plugin's build produces dist/; its pack script assembles the installable release folder.
+const pluginPack = join(packagesDir, 'orca-plugin', 'scripts', 'pack.mjs')
+if (existsSync(join(packagesDir, 'orca-plugin', 'dist', 'main.mjs')) && existsSync(pluginPack)) {
+  execFileSync(process.execPath, [pluginPack], {
+    cwd: join(packagesDir, 'orca-plugin'),
+    stdio: 'inherit'
+  })
+}
 
 if (existsSync(join(plugin, 'orca-plugin.json'))) {
   cpSync(plugin, join(assets, 'plugin', 'cpoepke.monaco-lsp'), { recursive: true })
