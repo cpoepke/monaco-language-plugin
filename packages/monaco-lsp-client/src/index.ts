@@ -46,6 +46,10 @@ export {
 export {
   CHANGE_DEBOUNCE_MS,
   DocumentManager,
+  OPEN_RETRY_INITIAL_MS,
+  OPEN_RETRY_LIMIT,
+  OPEN_RETRY_MAX_MS,
+  isRetryableNoSession,
   type DocumentInfo,
   type DocumentSession,
   type DocumentState
