@@ -49,6 +49,59 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+describe('pull diagnostics', () => {
+  it('a newer pull supersedes (and cancels) an older one that answers late', async () => {
+    let content = 'v1'
+    const listeners: (() => void)[] = []
+    const syncModel: SyncModel = {
+      uri: { toString: () => 'file:///repo/a.ts' },
+      getLanguageId: () => 'typescript',
+      getValue: () => content,
+      isDisposed: () => false,
+      onDidChangeContent: (listener) => {
+        listeners.push(listener)
+        return { dispose() {} }
+      }
+    }
+    const pulls: {
+      resolve: (value: unknown) => void
+      token: { isCancellationRequested: boolean }
+    }[] = []
+    const request = vi.fn(
+      async (method: string, params: { method?: string }, options?: { token?: never }) => {
+        if (method === 'document/open') return { ...opened, pullDiagnostics: true }
+        expect(params.method).toBe('textDocument/diagnostic')
+        return new Promise((resolve) => pulls.push({ resolve, token: options!.token! }))
+      }
+    )
+    const connection = {
+      isConnected: true,
+      request,
+      notify: vi.fn(() => true)
+    } as unknown as BridgeConnection
+    const markers: unknown[][] = []
+    const documents = new DocumentManager({
+      connection,
+      logger: {},
+      changeDebounceMs: 10,
+      setMarkers: (_model, diagnostics) => markers.push(diagnostics)
+    })
+    documents.attach(syncModel)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(pulls).toHaveLength(1)
+    content = 'v2'
+    listeners.forEach((listener) => listener())
+    await vi.advanceTimersByTimeAsync(10)
+    expect(pulls).toHaveLength(2)
+    expect(pulls[0]!.token.isCancellationRequested).toBe(true)
+    pulls[1]!.resolve({ kind: 'full', items: [{ message: 'new' }] })
+    await vi.advanceTimersByTimeAsync(0)
+    pulls[0]!.resolve({ kind: 'full', items: [{ message: 'old' }] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(markers).toEqual([[{ message: 'new' }]])
+  })
+})
+
 describe('no-session results', () => {
   it('classifies reasons, honouring the optional retryable flag', () => {
     expect(isRetryableNoSession({ reason: 'unsupported language: plaintext' })).toBe(false)

@@ -9,7 +9,7 @@ import {
   type OpenDocumentResult
 } from '@mlp/protocol'
 import type { BridgeConnection } from './connection'
-import { RpcError, errorMessage } from './connection'
+import { RpcError, errorMessage, type CancellationTokenLike } from './connection'
 import { fileUriKey, lspPullDiagnosticsToItems } from './conversion'
 import type { Logger } from './logger'
 
@@ -73,6 +73,8 @@ export type DocumentEntry<M extends SyncModel = SyncModel> = {
   /** When set, the earliest time (Date.now()) another open may be tried; null = sticky. */
   retryAt: number | null
   retryTimer: ReturnType<typeof setTimeout> | null
+  /** Cancels the in-flight `textDocument/diagnostic` pull (a newer one supersedes it). */
+  cancelDiagnosticsPull: (() => void) | null
   opening: Promise<DocumentSession | null> | null
   /** Bumped whenever the server-side state is invalidated, so late opens are discarded. */
   generation: number
@@ -153,6 +155,7 @@ export class DocumentManager<M extends SyncModel = SyncModel> {
       openFailures: 0,
       retryAt: null,
       retryTimer: null,
+      cancelDiagnosticsPull: null,
       opening: null,
       generation: 0,
       changeTimer: null,
@@ -177,6 +180,7 @@ export class DocumentManager<M extends SyncModel = SyncModel> {
     entry.closed = true
     entry.generation++
     entry.contentListener.dispose()
+    entry.cancelDiagnosticsPull?.()
     this.clearTimer(entry)
     this.clearRetry(entry)
     if (!entry.model.isDisposed()) {
@@ -295,6 +299,7 @@ export class DocumentManager<M extends SyncModel = SyncModel> {
   }
 
   private reset(entry: DocumentEntry<M>): void {
+    entry.cancelDiagnosticsPull?.()
     entry.generation++
     entry.session = null
     entry.opening = null
@@ -412,18 +417,35 @@ export class DocumentManager<M extends SyncModel = SyncModel> {
     if (!session?.pullDiagnostics || !setMarkers) {
       return
     }
+    // Why: pulls overlap while typing; an older answer arriving last must not win.
+    entry.cancelDiagnosticsPull?.()
+    const token = cancellationSource()
+    entry.cancelDiagnosticsPull = token.cancel
     try {
-      const result = await this.options.connection.request(BridgeMethods.lspRequest, {
-        sessionId: session.sessionId,
-        method: 'textDocument/diagnostic',
-        params: { textDocument: { uri: session.uri } }
-      })
+      const result = await this.options.connection.request(
+        BridgeMethods.lspRequest,
+        {
+          sessionId: session.sessionId,
+          method: 'textDocument/diagnostic',
+          params: { textDocument: { uri: session.uri } }
+        },
+        { token }
+      )
       const items = lspPullDiagnosticsToItems(result)
-      if (items && entry.session === session && !entry.model.isDisposed()) {
+      if (
+        items &&
+        !token.isCancellationRequested &&
+        entry.session === session &&
+        !entry.model.isDisposed()
+      ) {
         setMarkers(entry.model, items)
       }
     } catch {
-      // A dead or slow server must never break editing; markers just go stale.
+      // Superseded, or a dead/slow server: never break editing; markers just go stale.
+    } finally {
+      if (entry.cancelDiagnosticsPull === token.cancel) {
+        entry.cancelDiagnosticsPull = null
+      }
     }
   }
 
@@ -479,6 +501,26 @@ export class DocumentManager<M extends SyncModel = SyncModel> {
       this.options.onDidChange?.()
     } catch (error) {
       this.options.logger.error?.(`[mlp] status listener failed: ${errorMessage(error)}`)
+    }
+  }
+}
+
+function cancellationSource(): CancellationTokenLike & { cancel(): void } {
+  let cancelled = false
+  const listeners = new Set<() => void>()
+  return {
+    get isCancellationRequested() {
+      return cancelled
+    },
+    onCancellationRequested(listener) {
+      listeners.add(listener)
+      return { dispose: () => listeners.delete(listener) }
+    },
+    cancel() {
+      if (!cancelled) {
+        cancelled = true
+        for (const listener of [...listeners]) listener()
+      }
     }
   }
 }
