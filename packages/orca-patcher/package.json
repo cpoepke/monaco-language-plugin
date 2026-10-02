@@ -1,0 +1,32 @@
+{
+  "name": "monaco-lsp-orca",
+  "version": "0.1.0",
+  "description": "Installs the Monaco LSP injector into an installed Orca app (and the companion Orca plugin).",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "monaco-lsp-orca": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "assets"
+  ],
+  "scripts": {
+    "build": "tsup && node scripts/copy-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@electron/asar": "^4.0.0"
+  },
+  "devDependencies": {
+    "@mlp/orca-injector": "workspace:*"
+  }
+}
