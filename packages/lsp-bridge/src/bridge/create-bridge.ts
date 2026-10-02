@@ -62,7 +62,13 @@ export function createBridge(bridgeOptions: BridgeOptions): Bridge {
     }
   }
 
-  const context: BridgeContext = { options, sessions, resolution, status }
+  const context: BridgeContext = {
+    options,
+    sessions,
+    resolution,
+    trustProjectBinaries: options.trustProjectBinaries,
+    status
+  }
 
   const wss = new WebSocketServer({
     noServer: true,

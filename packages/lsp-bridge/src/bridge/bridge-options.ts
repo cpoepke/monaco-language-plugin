@@ -33,6 +33,12 @@ export type BridgeOptions = {
   maxSessions?: number
   /** Largest accepted WebSocket frame. Default 16 MiB. */
   maxMessageBytes?: number
+  /**
+   * Also look for server binaries in the opened project's `node_modules/.bin`.
+   * Off by default: opening a file in an untrusted repository must never run
+   * an executable that repository ships.
+   */
+  trustProjectBinaries?: boolean
 }
 
 export type NormalizedBridgeOptions = {
@@ -47,6 +53,7 @@ export type NormalizedBridgeOptions = {
   requestTimeoutMs: number
   maxSessions: number
   maxMessageBytes: number
+  trustProjectBinaries: boolean
 }
 
 function positiveNumber(value: number | undefined, fallback: number, name: string): number {
@@ -89,6 +96,7 @@ export function normalizeBridgeOptions(options: BridgeOptions): NormalizedBridge
     idleShutdownMs: positiveNumber(options.idleShutdownMs, 3 * 60_000, 'idleShutdownMs'),
     requestTimeoutMs: positiveNumber(options.requestTimeoutMs, 15_000, 'requestTimeoutMs'),
     maxSessions: positiveNumber(options.maxSessions, 8, 'maxSessions'),
-    maxMessageBytes: positiveNumber(options.maxMessageBytes, 16 * 1024 * 1024, 'maxMessageBytes')
+    maxMessageBytes: positiveNumber(options.maxMessageBytes, 16 * 1024 * 1024, 'maxMessageBytes'),
+    trustProjectBinaries: options.trustProjectBinaries === true
   }
 }

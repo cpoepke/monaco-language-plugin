@@ -13,6 +13,8 @@ const USAGE = `Usage: mlp-bridge [options]
   --root <dir>      Allowed root; repeatable. Without it any local file may be served.
   --host <addr>     Interface to bind (default 127.0.0.1)
   --allow-remote    Permit a non-loopback --host
+  --trust-project-binaries
+                    Also run servers from the project's node_modules/.bin
   --print-url       Print {"url","port","token"} as one JSON line on stdout
   --verbose         Debug logging on stderr
   -h, --help        Show this help
@@ -32,6 +34,7 @@ function parseCliArgs() {
         root: { type: 'string', multiple: true },
         host: { type: 'string' },
         'allow-remote': { type: 'boolean' },
+        'trust-project-binaries': { type: 'boolean' },
         'print-url': { type: 'boolean' },
         verbose: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' }
@@ -66,6 +69,7 @@ async function main(): Promise<void> {
     host,
     token,
     allowRemote: values['allow-remote'] ?? false,
+    trustProjectBinaries: values['trust-project-binaries'] ?? false,
     allowedRoots: (values.root ?? []).map((root) => resolve(root)),
     logger
   })

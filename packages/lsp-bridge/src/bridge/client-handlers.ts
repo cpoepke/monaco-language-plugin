@@ -49,6 +49,8 @@ export type BridgeContext = {
   options: NormalizedBridgeOptions
   sessions: SessionManager
   resolution: ServerResolutionContext
+  /** See BridgeOptions.trustProjectBinaries. */
+  trustProjectBinaries: boolean
   status: () => BridgeStatus
 }
 
@@ -108,10 +110,12 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
     const rootPath = realpathLenient(
       detectWorkspaceRoot(realFile, language, boundary === undefined ? {} : { boundary })
     )
-    const resolution = resolveLspServerForLanguage(language, {
-      ...context.resolution,
-      projectRoot: rootPath
-    })
+    const resolution = resolveLspServerForLanguage(
+      language,
+      context.trustProjectBinaries
+        ? { ...context.resolution, projectRoot: rootPath }
+        : context.resolution
+    )
     if (!resolution.server) {
       return { sessionId: null, reason: resolution.reason }
     }
