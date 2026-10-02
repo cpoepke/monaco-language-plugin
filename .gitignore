@@ -8,3 +8,5 @@ fixtures/rust/target/
 .DS_Store
 __pycache__/
 .claude/worktrees/
+packages/orca-patcher/assets/
+packages/orca-injector/test/e2e/.fixture-dist/

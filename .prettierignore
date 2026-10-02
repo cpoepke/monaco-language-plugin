@@ -3,4 +3,6 @@ dist
 vendor
 fixtures
 pnpm-lock.yaml
+packages/orca-patcher/assets
+packages/orca-injector/test/e2e/.fixture-dist
 packages/orca-plugin/release
