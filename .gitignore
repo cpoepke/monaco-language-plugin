@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+test-results/
+playwright-report/
+fixtures/rust/target/
+.DS_Store
+__pycache__/

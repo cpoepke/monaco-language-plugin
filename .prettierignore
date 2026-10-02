@@ -1,0 +1,5 @@
+node_modules
+dist
+vendor
+fixtures
+pnpm-lock.yaml
