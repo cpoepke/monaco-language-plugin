@@ -94,7 +94,9 @@ export function findAnchorFiles(extractedDir: string): string[] {
     return []
   }
   return names
-    .filter((n) => fs.readFileSync(path.join(assetsDir, n), 'utf8').includes(MONACO_GLOBAL_API_ANCHOR))
+    .filter((n) =>
+      fs.readFileSync(path.join(assetsDir, n), 'utf8').includes(MONACO_GLOBAL_API_ANCHOR)
+    )
     .map((n) => `${RENDERER_ASSETS_DIR}/${n}`)
 }
 
@@ -237,7 +239,9 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
       }
     }
     if (target.kind === 'appimage-extracted') {
-      logger.info(`Start Orca with ${path.join(target.appRoot, 'AppRun')} (not the original AppImage).`)
+      logger.info(
+        `Start Orca with ${path.join(target.appRoot, 'AppRun')} (not the original AppImage).`
+      )
     }
     logger.info(
       'Orca updates replace app.asar and remove the patch; run `monaco-lsp-orca status` after ' +

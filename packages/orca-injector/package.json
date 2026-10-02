@@ -15,12 +15,17 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts"
+    "test:e2e": "tsup && vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
+    "@mlp/monaco-lsp-client": "workspace:*",
     "@mlp/protocol": "workspace:*"
   },
   "devDependencies": {
-    "happy-dom": "^20.0.0"
+    "@types/node": "^22.10.0",
+    "happy-dom": "^20.0.0",
+    "monaco-editor": "0.55.1",
+    "playwright-core": "1.56.1",
+    "vite": "^7.3.0"
   }
 }

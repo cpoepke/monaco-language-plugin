@@ -114,7 +114,11 @@ export async function packDirectory(
           streamGenerator: () => fs.createReadStream(abs)
         })
       } else if (entry.isDirectory()) {
-        streams.push({ type: 'directory', path: archivePath, unpacked: isUnpacked(rel, 'directory') })
+        streams.push({
+          type: 'directory',
+          path: archivePath,
+          unpacked: isUnpacked(rel, 'directory')
+        })
         walk(abs, rel)
       } else if (entry.isFile()) {
         const stat = fs.statSync(abs)

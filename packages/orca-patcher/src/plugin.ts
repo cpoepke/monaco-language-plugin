@@ -9,8 +9,7 @@ export const installedPluginDir = (ctx: Context): string =>
   path.join(ctx.stateDir, 'plugin', PLUGIN_KEY)
 
 export type PluginInstallResult =
-  | { installed: true; dir: string; version: string | null }
-  | { installed: false; reason: string }
+  { installed: true; dir: string; version: string | null } | { installed: false; reason: string }
 
 /** Copy the bundled plugin folder to `<stateDir>/plugin/cpoepke.monaco-lsp/` (replacing it). */
 export function installPluginFolder(ctx: Context, source: string): PluginInstallResult {

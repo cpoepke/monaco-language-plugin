@@ -24,9 +24,10 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@electron/asar": "^4.0.0"
+    "@electron/asar": "^4.3.1"
   },
   "devDependencies": {
-    "@mlp/orca-injector": "workspace:*"
+    "@mlp/orca-injector": "workspace:*",
+    "@types/node": "^22.10.0"
   }
 }

@@ -51,7 +51,11 @@ export const defaultRunCommand: CommandRunner = (command, args) =>
       (error, stdout, stderr) => {
         const code =
           error == null ? 0 : typeof error.code === 'number' ? error.code : error.code ? 127 : 1
-        resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? error?.message ?? '') })
+        resolve({
+          code,
+          stdout: String(stdout ?? ''),
+          stderr: String(stderr ?? error?.message ?? '')
+        })
       }
     )
   })
