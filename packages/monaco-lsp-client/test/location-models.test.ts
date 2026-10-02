@@ -1,0 +1,197 @@
+// Adapted from stablyai/orca PR #24703 (MIT). See vendor/orca-lsp.
+import { describe, expect, it, vi } from 'vitest'
+import { URI } from 'monaco-editor/esm/vs/base/common/uri.js'
+import {
+  LocationModels,
+  MAX_LOCATION_FILES,
+  PEEK_SCHEME,
+  type LocationModelMonaco,
+  type ReadFile
+} from '../src/location-models'
+
+type FakeModel = {
+  isAttachedToEditor: () => boolean
+  dispose: () => void
+  isDisposed?: () => boolean
+  getValue: () => string
+  setValue: (value: string) => void
+  language?: string
+}
+
+function fakeMonaco(existing: string[] = []): LocationModelMonaco<URI> & {
+  created: string[]
+  disposedUris: string[]
+  models: Map<string, FakeModel>
+} {
+  const created: string[] = []
+  const disposedUris: string[] = []
+  const models = new Map<string, FakeModel>()
+  for (const uri of existing) {
+    models.set(uri, {
+      isAttachedToEditor: () => true,
+      dispose: vi.fn(),
+      getValue: () => '',
+      setValue: vi.fn()
+    })
+  }
+  return {
+    created,
+    disposedUris,
+    models,
+    Uri: URI,
+    editor: {
+      getModel: (uri) => models.get(uri.toString()) ?? null,
+      createModel: (initial, language, uri) => {
+        created.push(uri.toString())
+        let disposed = false
+        let value = initial
+        const model: FakeModel = {
+          language,
+          isAttachedToEditor: () => false,
+          dispose: () => {
+            disposed = true
+            disposedUris.push(uri.toString())
+            models.delete(uri.toString())
+          },
+          isDisposed: () => disposed,
+          getValue: () => value,
+          setValue: vi.fn((next: string) => {
+            value = next
+          })
+        }
+        models.set(uri.toString(), model)
+        return model
+      }
+    }
+  }
+}
+
+const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }
+const text = (value: string): ReturnType<ReadFile> =>
+  Promise.resolve({ text: value, languageId: 'typescript' })
+
+describe('LocationModels', () => {
+  it('reuses an open file model even when the server spells the URI differently', async () => {
+    const monaco = fakeMonaco([URI.file('C:/src/a.ts').toString()])
+    const readFile = vi.fn<ReadFile>()
+    const result = await new LocationModels(monaco, readFile).resolve([
+      { uri: 'file:///C:/src/a.ts', range }
+    ])
+    expect(result[0]?.uri.toString()).toBe(URI.file('C:/src/a.ts').toString())
+    expect(readFile).not.toHaveBeenCalled()
+  })
+
+  it('creates language-tagged peek models for unopened files and drops unreadable ones', async () => {
+    const monaco = fakeMonaco()
+    const readFile = vi.fn<ReadFile>(async (uri) =>
+      uri.endsWith('missing.ts') ? null : { text: 'x', languageId: 'typescript' }
+    )
+    const result = await new LocationModels(monaco, readFile).resolve([
+      { uri: 'file:///repo/b.ts', range },
+      { uri: 'file:///repo/missing.ts', range }
+    ])
+    expect(result).toHaveLength(1)
+    expect(result[0]?.uri.scheme).toBe(PEEK_SCHEME)
+    expect(result[0]?.uri.path).toBe('/repo/b.ts')
+    expect(result[0]?.range).toEqual({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: 1,
+      endColumn: 2
+    })
+    expect(readFile).toHaveBeenCalledWith('file:///repo/b.ts')
+    expect(monaco.models.get(result[0]!.uri.toString())?.language).toBe('typescript')
+  })
+
+  it('resolveEach stays aligned with its input', async () => {
+    const monaco = fakeMonaco()
+    const readFile = vi.fn<ReadFile>(async (uri) =>
+      uri.endsWith('gone.ts') ? null : await text('x')
+    )
+    const result = await new LocationModels(monaco, readFile).resolveEach([
+      { uri: 'file:///repo/gone.ts', range },
+      { uri: 'file:///repo/here.ts', range }
+    ])
+    expect(result[0]).toBeNull()
+    expect(result[1]?.uri.path).toBe('/repo/here.ts')
+  })
+
+  it('reads at most MAX_LOCATION_FILES distinct files', async () => {
+    const monaco = fakeMonaco()
+    const readFile = vi.fn<ReadFile>(() => text('x'))
+    const locations = Array.from({ length: MAX_LOCATION_FILES + 50 }, (_, i) => ({
+      uri: `file:///repo/f${i}.ts`,
+      range
+    }))
+    const result = await new LocationModels(monaco, readFile).resolve(locations)
+    expect(readFile).toHaveBeenCalledTimes(MAX_LOCATION_FILES)
+    expect(result).toHaveLength(MAX_LOCATION_FILES)
+  })
+
+  it('keeps every model of the current result alive, then prunes to the cap on the next resolve', async () => {
+    const monaco = fakeMonaco()
+    const models = new LocationModels(monaco, () => text('x'))
+    const locations = Array.from({ length: 80 }, (_, i) => ({
+      uri: `file:///pool/f${i}.ts`,
+      range
+    }))
+    expect(await models.resolve(locations)).toHaveLength(80)
+    expect(monaco.disposedUris).toEqual([])
+
+    await models.resolve([{ uri: 'file:///other/x.ts', range }])
+    expect(monaco.disposedUris).toHaveLength(31)
+    // Oldest first: the earliest entries of the previous result went.
+    expect(monaco.disposedUris[0]).toBe(
+      URI.from({ scheme: PEEK_SCHEME, path: '/pool/f0.ts' }).toString()
+    )
+  })
+
+  it('refreshes a reused detached peek model, and drops it once unreadable', async () => {
+    const monaco = fakeMonaco()
+    let disk: string | null = 'v1'
+    const models = new LocationModels(monaco, async () => {
+      if (disk === null) {
+        throw new Error('gone')
+      }
+      return { text: disk, languageId: null }
+    })
+    const locations = [{ uri: 'file:///refresh/a.ts', range }]
+    const [first] = await models.resolve(locations)
+    disk = 'v2'
+    const [second] = await models.resolve(locations)
+    expect(second?.uri.toString()).toBe(first?.uri.toString())
+    expect(monaco.created).toHaveLength(1)
+    expect(monaco.models.get(first!.uri.toString())?.getValue()).toBe('v2')
+
+    disk = null
+    expect(await models.resolve(locations)).toEqual([])
+    expect(monaco.disposedUris).toContain(first!.uri.toString())
+  })
+
+  it('starts every file read before awaiting any of them', async () => {
+    const monaco = fakeMonaco()
+    const resolvers: (() => void)[] = []
+    const readFile = vi.fn<ReadFile>(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(() => resolve({ text: 'x', languageId: null }))
+        })
+    )
+    const result = new LocationModels(monaco, readFile).resolve([
+      { uri: 'file:///concurrent/a.ts', range },
+      { uri: 'file:///concurrent/b.ts', range }
+    ])
+    await Promise.resolve()
+    expect(readFile).toHaveBeenCalledTimes(2)
+    resolvers.forEach((resolve) => resolve())
+    expect(await result).toHaveLength(2)
+  })
+
+  it('dispose() removes the peek models it created', async () => {
+    const monaco = fakeMonaco()
+    const models = new LocationModels(monaco, () => text('x'))
+    await models.resolve([{ uri: 'file:///d/a.ts', range }])
+    models.dispose()
+    expect(monaco.models.size).toBe(0)
+  })
+})

@@ -7,3 +7,4 @@ playwright-report/
 fixtures/rust/target/
 .DS_Store
 __pycache__/
+.claude/worktrees/
