@@ -1,0 +1,39 @@
+{
+  "name": "@mlp/monaco-lsp-client",
+  "version": "0.1.0",
+  "description": "Monaco editor client for the LSP bridge: cross-file go-to-definition, references, hover, document symbols and links.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "monaco-editor": ">=0.50.0 <1"
+  },
+  "devDependencies": {
+    "@mlp/protocol": "workspace:*",
+    "@types/ws": "^8.18.1",
+    "monaco-editor": "0.55.1",
+    "ws": "^8.18.3"
+  }
+}

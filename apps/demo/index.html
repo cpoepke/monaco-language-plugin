@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Monaco LSP demo</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <strong>Monaco LSP demo</strong>
+      <label>
+        Project
+        <select id="project"></select>
+      </label>
+      <span id="status" class="status" data-state="connecting">bridge: connecting…</span>
+    </header>
+    <div id="banner" class="banner" hidden></div>
+    <main class="layout">
+      <nav id="tree" class="tree" aria-label="Files"></nav>
+      <section class="editor-pane">
+        <div id="breadcrumb" class="breadcrumb"></div>
+        <div id="editor" class="editor"></div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
