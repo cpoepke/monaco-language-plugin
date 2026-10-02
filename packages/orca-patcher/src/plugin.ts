@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { readPluginManifest } from './assets.js'
 import { PLUGIN_KEY } from './constants.js'
-import type { Context } from './context.js'
+import { type Context, chownToInvokingUser } from './context.js'
 import { replaceDir } from './fsutil.js'
 
 export const installedPluginDir = (ctx: Context): string =>
@@ -24,6 +24,7 @@ export function installPluginFolder(ctx: Context, source: string): PluginInstall
   }
   const dir = installedPluginDir(ctx)
   replaceDir(source, dir)
+  chownToInvokingUser(ctx, dir)
   return { installed: true, dir, version: manifest.version ?? null }
 }
 

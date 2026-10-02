@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import * as asar from '@electron/asar'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readAsarFile, readEntries } from '../src/asar'
 import { readBackupMeta } from '../src/backup'
 import {
@@ -149,6 +149,82 @@ describe('install', () => {
     await expect(install({ ...running, force: true })).resolves.toMatchObject({
       backupAction: 'created'
     })
+  })
+})
+
+describe('install under sudo', () => {
+  it("writes state and plugin into the invoking user's home and hands them back", async () => {
+    const f = await fake()
+    const userHome = path.join(f.root, 'alice-home')
+    fs.mkdirSync(userHome)
+    const chowned: [string, number, number][] = []
+    const system = {
+      getuid: () => 0,
+      readFile: (file: string) =>
+        file === '/etc/passwd'
+          ? `root:x:0:0:root:/root:/bin/sh\nalice:x:501:20:Alice:${userHome}:/bin/zsh\n`
+          : null,
+      shellHomeOf: () => {
+        throw new Error('not needed when /etc/passwd has the user')
+      },
+      chown: (file: string, uid: number, gid: number) => {
+        chowned.push([file, uid, gid])
+      }
+    }
+    const env = { SUDO_USER: 'alice', SUDO_UID: '501', SUDO_GID: '20' }
+    const { homeDir: _home, stateDir: _state, ...rest } = f.options
+    const options = { ...rest, env, system }
+
+    const ctx = createContext(options)
+    expect(ctx.invokingUser).toEqual({ name: 'alice', uid: 501, gid: 20, home: userHome })
+    const stateDir = path.join(userHome, '.monaco-lsp-orca')
+    expect(ctx.stateDir).toBe(stateDir)
+
+    const result = await install(options)
+    expect(result.plugin).toMatchObject({ installed: true })
+    expect(fs.existsSync(path.join(stateDir, 'state.json'))).toBe(true)
+    const pluginDir = path.join(stateDir, 'plugin', 'cpoepke.monaco-lsp')
+    const owned = new Set(chowned.filter(([, u, g]) => u === 501 && g === 20).map(([p]) => p))
+    for (const p of [
+      stateDir,
+      path.join(stateDir, 'state.json'),
+      path.join(stateDir, 'plugin'),
+      pluginDir,
+      path.join(pluginDir, 'orca-plugin.json'),
+      path.join(pluginDir, 'dist', 'main.js')
+    ]) {
+      expect(owned, p).toContain(p)
+    }
+    // nothing outside the user's home (e.g. Orca's app.asar) is chowned
+    expect(chowned.every(([p]) => p.startsWith(userHome + path.sep))).toBe(true)
+  })
+
+  it('falls back to ~user, and ignores sudo when not root or on Windows', () => {
+    const system = {
+      getuid: () => 0,
+      readFile: () => 'root:x:0:0:root:/root:/bin/sh\n',
+      shellHomeOf: (user: string) => `/Users/${user}`,
+      chown: () => {}
+    }
+    const env = { SUDO_USER: 'bob', SUDO_UID: '502', SUDO_GID: '20' }
+    expect(createContext({ platform: 'darwin', env, system }).homeDir).toBe('/Users/bob')
+    expect(createContext({ platform: 'darwin', env, system }).invokingUser?.uid).toBe(502)
+    const asUser = createContext({
+      platform: 'linux',
+      env,
+      system: { ...system, getuid: () => 501 }
+    })
+    expect(asUser.invokingUser).toBeNull()
+    expect(createContext({ platform: 'win32', env, system }).invokingUser).toBeNull()
+    // a hostile SUDO_USER never reaches the shell
+    const shellHomeOf = vi.fn(() => '/x')
+    const hostile = createContext({
+      platform: 'linux',
+      env: { ...env, SUDO_USER: 'x;rm -rf ~' },
+      system: { ...system, shellHomeOf }
+    })
+    expect(hostile.invokingUser).toBeNull()
+    expect(shellHomeOf).not.toHaveBeenCalled()
   })
 })
 
