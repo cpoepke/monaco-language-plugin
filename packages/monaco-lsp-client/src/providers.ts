@@ -74,16 +74,54 @@ type MonacoLink = languages.ILink & {
   mlp?: { sessionId: string; lspLink: Record<string, unknown> }
 }
 
-function cancelled(token: CancellationToken | undefined): Promise<null> {
-  return new Promise((resolve) => {
-    if (!token) {
-      return
+/**
+ * Resolves with `promise`, or with null as soon as `token` is cancelled. Without a
+ * token it is `promise` itself; the cancellation listener is disposed once either settles.
+ */
+export function raceCancellation<T>(
+  promise: Promise<T>,
+  token: CancellationToken | undefined
+): Promise<T | null> {
+  if (!token) {
+    return promise
+  }
+  if (token.isCancellationRequested) {
+    // Why: the caller stops waiting, but the work may still fail later; never leave it unhandled.
+    promise.catch(() => {})
+    return Promise.resolve(null)
+  }
+  return new Promise<T | null>((resolve, reject) => {
+    let settled = false
+    let listener: IDisposable | null = null
+    const finish = (): boolean => {
+      if (settled) {
+        return false
+      }
+      settled = true
+      listener?.dispose()
+      return true
     }
-    if (token.isCancellationRequested) {
-      resolve(null)
-      return
+    listener = token.onCancellationRequested(() => {
+      if (finish()) {
+        resolve(null)
+      }
+    })
+    if (settled) {
+      // The token fired synchronously while registering.
+      listener.dispose()
     }
-    token.onCancellationRequested(() => resolve(null))
+    promise.then(
+      (value) => {
+        if (finish()) {
+          resolve(value)
+        }
+      },
+      (error: unknown) => {
+        if (finish()) {
+          reject(error)
+        }
+      }
+    )
   })
 }
 
@@ -120,8 +158,12 @@ async function requestForModel(
       method,
       params: buildParams(session)
     }
+    if (token?.isCancellationRequested) {
+      return null
+    }
     try {
-      const result = await ctx.connection.request(BridgeMethods.lspRequest, params)
+      // Why: with the token, a cancelled request sends lsp/cancel for its JSON-RPC id.
+      const result = await ctx.connection.request(BridgeMethods.lspRequest, params, { token })
       return { entry, session, result }
     } catch (error) {
       if (retry && error instanceof RpcError && error.code === JsonRpcErrorCodes.SessionNotFound) {
@@ -133,7 +175,8 @@ async function requestForModel(
     }
   }
   try {
-    return await Promise.race([run(true), cancelled(token)])
+    // Why: also stop waiting while the document/open round-trip is still in flight.
+    return await raceCancellation(run(true), token)
   } catch {
     // Why: a dead or slow server must never break editing; features simply don't answer.
     return null
@@ -360,10 +403,9 @@ export function registerLanguageProviders(ctx: ProviderContext, languageId: stri
               method: 'documentLink/resolve',
               params: link.mlp.lspLink
             }
-            const resolved = await Promise.race([
-              ctx.connection.request(BridgeMethods.lspRequest, params),
-              cancelled(token)
-            ])
+            const resolved = await ctx.connection.request(BridgeMethods.lspRequest, params, {
+              token
+            })
             if (!resolved || typeof resolved !== 'object') {
               return null
             }

@@ -12,8 +12,10 @@ export {
   RpcError,
   type BridgeConnectionOptions,
   type BridgeUrlSource,
+  type CancellationTokenLike,
   type ConnectionState,
   type ReconnectOptions,
+  type RequestOptions,
   type WebSocketFactory,
   type WebSocketLike
 } from './connection'

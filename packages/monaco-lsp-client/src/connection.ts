@@ -2,6 +2,7 @@ import {
   BridgeMethods,
   JsonRpcErrorCodes,
   PROTOCOL_VERSION,
+  type CancelRequestParams,
   type HelloParams,
   type HelloResult,
   type JsonRpcError,
@@ -35,8 +36,26 @@ export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'dis
 export const ClientErrorCodes = {
   NotConnected: -32900,
   Timeout: -32901,
-  ConnectionClosed: -32902
+  ConnectionClosed: -32902,
+  /** The caller's cancellation token fired before the bridge answered. */
+  Cancelled: -32903
 } as const
+
+/** Structural subset of Monaco's CancellationToken. */
+export type CancellationTokenLike = {
+  readonly isCancellationRequested: boolean
+  onCancellationRequested(listener: () => void): { dispose(): void }
+}
+
+export type RequestOptions = {
+  /** Overrides the connection's default request timeout (0 = none). */
+  timeoutMs?: number
+  /**
+   * Stops waiting when the token fires: the promise rejects with
+   * ClientErrorCodes.Cancelled and, for `lsp/request`, the bridge is told via `lsp/cancel`.
+   */
+  token?: CancellationTokenLike
+}
 
 export class RpcError extends Error {
   constructor(
@@ -53,6 +72,7 @@ type Pending = {
   resolve: (value: unknown) => void
   reject: (error: RpcError) => void
   timer: ReturnType<typeof setTimeout> | null
+  cancelListener: { dispose(): void } | null
 }
 
 /** A fixed URL, or a function resolved before every (re)connect. */
@@ -145,13 +165,22 @@ export class BridgeConnection {
   }
 
   /** Sends a request once connected (after hello). Rejects with RpcError. */
-  request<T = unknown>(method: string, params?: unknown, timeoutMs?: number): Promise<T> {
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: number | RequestOptions
+  ): Promise<T> {
+    const { timeoutMs, token } =
+      typeof options === 'number' ? { timeoutMs: options } : (options ?? {})
+    if (token?.isCancellationRequested) {
+      return Promise.reject(new RpcError(ClientErrorCodes.Cancelled, `${method} cancelled`))
+    }
     if (!this.isConnected) {
       return Promise.reject(
         new RpcError(ClientErrorCodes.NotConnected, `Not connected to the bridge (${method})`)
       )
     }
-    return this.sendRequest<T>(method, params, timeoutMs)
+    return this.sendRequest<T>(method, params, timeoutMs, token)
   }
 
   /** Sends a notification; returns false (and drops it) when not connected. */
@@ -349,7 +378,12 @@ export class BridgeConnection {
     }, delay)
   }
 
-  private sendRequest<T>(method: string, params: unknown, timeoutMs?: number): Promise<T> {
+  private sendRequest<T>(
+    method: string,
+    params: unknown,
+    timeoutMs?: number,
+    token?: CancellationTokenLike
+  ): Promise<T> {
     const id = this.nextId++
     return new Promise<T>((resolve, reject) => {
       const timeout = timeoutMs ?? this.options.requestTimeoutMs ?? 30_000
@@ -359,20 +393,57 @@ export class BridgeConnection {
         timer:
           timeout > 0
             ? setTimeout(() => {
-                this.pending.delete(id)
-                reject(new RpcError(ClientErrorCodes.Timeout, `${method} timed out`))
+                if (this.pending.get(id) === entry) {
+                  this.settle(id, entry)
+                  reject(new RpcError(ClientErrorCodes.Timeout, `${method} timed out`))
+                }
               }, timeout)
-            : null
+            : null,
+        cancelListener: null
       }
       this.pending.set(id, entry)
       if (!this.sendRaw({ jsonrpc: '2.0', id, method, params })) {
-        this.pending.delete(id)
-        if (entry.timer !== null) {
-          clearTimeout(entry.timer)
-        }
+        this.settle(id, entry)
         reject(new RpcError(ClientErrorCodes.NotConnected, `Cannot send ${method}`))
+        return
+      }
+      if (token) {
+        entry.cancelListener = token.onCancellationRequested(() => {
+          if (this.pending.get(id) !== entry) {
+            return
+          }
+          this.settle(id, entry)
+          if (method === BridgeMethods.lspRequest) {
+            // Why: lets the bridge forward $/cancelRequest so the server stops working on it.
+            const cancel: CancelRequestParams = { id }
+            this.notify(BridgeMethods.cancelRequest, cancel)
+          }
+          reject(new RpcError(ClientErrorCodes.Cancelled, `${method} cancelled`))
+        })
+        // Why: a listener registered on an already-fired token may never be called.
+        if (token.isCancellationRequested && this.pending.get(id) === entry) {
+          entry.cancelListener.dispose()
+          entry.cancelListener = null
+          this.settle(id, entry)
+          reject(new RpcError(ClientErrorCodes.Cancelled, `${method} cancelled`))
+        }
       }
     })
+  }
+
+  /** Forgets a pending request and releases its timer and cancellation listener. */
+  private settle(id: JsonRpcId, entry: Pending): void {
+    if (this.pending.get(id) === entry) {
+      this.pending.delete(id)
+    }
+    if (entry.timer !== null) {
+      clearTimeout(entry.timer)
+      entry.timer = null
+    }
+    if (entry.cancelListener) {
+      entry.cancelListener.dispose()
+      entry.cancelListener = null
+    }
   }
 
   private sendRaw(message: Record<string, unknown>): boolean {
@@ -427,10 +498,7 @@ export class BridgeConnection {
     if (!entry) {
       return
     }
-    this.pending.delete(id)
-    if (entry.timer !== null) {
-      clearTimeout(entry.timer)
-    }
+    this.settle(id, entry)
     const error = message.error as JsonRpcError | undefined
     if (error) {
       entry.reject(new RpcError(error.code, error.message, error.data))
@@ -440,12 +508,9 @@ export class BridgeConnection {
   }
 
   private rejectAll(error: RpcError): void {
-    const entries = [...this.pending.values()]
-    this.pending.clear()
-    for (const entry of entries) {
-      if (entry.timer !== null) {
-        clearTimeout(entry.timer)
-      }
+    const entries = [...this.pending.entries()]
+    for (const [id, entry] of entries) {
+      this.settle(id, entry)
       entry.reject(error)
     }
   }
