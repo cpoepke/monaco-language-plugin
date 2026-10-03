@@ -56,10 +56,23 @@ injected script wires them into Orca's editor.
 - **Monaco's built-in TS navigation is replaced, not stacked.** The client turns off the TS worker's
   definitions/references/hovers/symbols up front and answers them itself, falling back to the TS
   worker when no bridge session exists, so results are never shown twice.
-- **Security.** The bridge listens on loopback only and requires a random token. Only navigation
-  requests are forwarded (no `executeCommand`, edits or configuration changes). File reads are
-  confined to session roots. Binaries in a project's `node_modules/.bin` run only when explicitly
-  trusted (`--trust-project-binaries`).
+- **Security.** The bridge listens on loopback only, requires a random token and refuses
+  WebSocket handshakes with a foreign `Origin` or a non-loopback `Host`. Only navigation requests
+  are forwarded (no `executeCommand`, edits or configuration changes). With `allowedRoots` set
+  (fixed `--root`s, or a function the embedder evaluates on every open and read; the Orca
+  plugin passes Orca's worktree roots), documents and file reads outside those roots are
+  refused, and a provider that cannot answer refuses everything. Without it, reads are confined
+  to the roots of sessions the client opened. Session roots are never the filesystem root, the
+  home directory or above it, and only existing local files (no UNC hosts) can be opened.
+  Server binaries come from absolute `PATH` entries and fixed dirs and are spawned by absolute
+  path; binaries in a project's `node_modules/.bin` run only when explicitly trusted
+  (`--trust-project-binaries`).
+- **Results use the client's paths.** Servers see realpaths; result URIs under a symlinked root
+  are rewritten back to the spelling the client opened the document with.
+- **Cancellation.** `lsp/cancel {id}` sends `$/cancelRequest` for the client's pending
+  `lsp/request` with that JSON-RPC id, which then fails with `-32800` (LSP RequestCancelled).
+- **Watched files.** Servers that register `workspace/didChangeWatchedFiles` watchers (gopls,
+  rust-analyzer) get created/changed/deleted events from one watcher per session root.
 
 ## Orca integration facts
 
