@@ -10,3 +10,4 @@ __pycache__/
 .claude/worktrees/
 packages/orca-patcher/assets/
 packages/orca-injector/test/e2e/.fixture-dist/
+coverage/
