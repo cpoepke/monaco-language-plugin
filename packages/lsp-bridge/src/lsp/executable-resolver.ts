@@ -1,4 +1,4 @@
-import { accessSync, constants, statSync } from 'node:fs'
+import { accessSync, constants, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, posix, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -50,9 +50,12 @@ function windowsCandidates(base: string, pathExt: string): string[] {
 }
 
 /**
- * Find `command` the way a shell would, without spawning one: absolute or
- * relative paths are checked directly, bare names are searched in PATH and then
- * in `extraDirs`. Returns the absolute path, or null when nothing runnable exists.
+ * Find `command` the way a shell would, without spawning one: absolute paths
+ * are checked directly, bare names are searched in PATH and then in
+ * `extraDirs`. Relative commands and relative search dirs (`.` or an empty
+ * PATH entry, which a shell resolves against the cwd, i.e. whatever project is
+ * open) are never used. Returns an absolute path, or null when nothing
+ * runnable exists.
  */
 export function resolveExecutable(
   command: string,
@@ -76,10 +79,9 @@ export function resolveExecutable(
 
   const pathEnv = options.pathEnv ?? process.env.PATH ?? process.env.Path ?? ''
   const separator = pathApi.delimiter
-  const dirs = [
-    ...pathEnv.split(separator).filter((dir) => dir.length > 0),
-    ...(options.extraDirs ?? [])
-  ]
+  const dirs = [...pathEnv.split(separator), ...(options.extraDirs ?? [])].filter(
+    (dir) => dir.length > 0 && pathApi.isAbsolute(dir)
+  )
   const seen = new Set<string>()
   for (const dir of dirs) {
     if (seen.has(dir)) {
@@ -95,15 +97,20 @@ export function resolveExecutable(
   return null
 }
 
-/** Every `node_modules/.bin` from `startDir` up to the filesystem root, nearest
- *  first — the same lookup `npm run` performs. */
-export function nodeModulesBinDirs(startDir: string): string[] {
+/** Every `node_modules/.bin` from `startDir` up to `stopDir` (inclusive; the
+ *  filesystem root when omitted), nearest first — the lookup `npm run`
+ *  performs. A `node_modules` directly under a filesystem root is never
+ *  included: on Windows any user can create `C:\node_modules\.bin`. */
+export function nodeModulesBinDirs(startDir: string, stopDir?: string): string[] {
   const dirs: string[] = []
   let current = startDir
   for (;;) {
-    dirs.push(join(current, 'node_modules', '.bin'))
     const parent = dirname(current)
     if (parent === current) {
+      return dirs
+    }
+    dirs.push(join(current, 'node_modules', '.bin'))
+    if (current === stopDir) {
       return dirs
     }
     current = parent
@@ -117,12 +124,46 @@ export function defaultExtraBinDirs(): string[] {
   return [join(home, 'go', 'bin'), join(home, '.cargo', 'bin')]
 }
 
-/** The bridge's own node_modules/.bin chain, so servers installed as package
+const BRIDGE_PACKAGE_NAME = '@mlp/lsp-bridge'
+
+/** The directory holding the bridge's own package.json: the nearest
+ *  package.json above `startDir`, if it is the bridge's. */
+export function bridgePackageRoot(startDir: string): string | null {
+  let current = startDir
+  for (;;) {
+    let text: string | null = null
+    try {
+      text = readFileSync(join(current, 'package.json'), 'utf8')
+    } catch {
+      text = null
+    }
+    if (text !== null) {
+      try {
+        return (JSON.parse(text) as { name?: unknown }).name === BRIDGE_PACKAGE_NAME
+          ? current
+          : null
+      } catch {
+        return null
+      }
+    }
+    const parent = dirname(current)
+    if (parent === current) {
+      return null
+    }
+    current = parent
+  }
+}
+
+/** The bridge package's own node_modules/.bin dirs, so servers installed as its
  *  dependencies (e.g. typescript-language-server) are found without PATH edits.
- *  Empty when the bridge is embedded somewhere without a node_modules tree. */
-export function bridgeBinDirs(): string[] {
+ *  The walk stops at the bridge's package root: directories above it belong to
+ *  whoever installed the bridge. Empty when the bridge is bundled into another
+ *  program (no bridge package.json next to it). */
+export function bridgeBinDirs(moduleUrl: string = import.meta.url): string[] {
   try {
-    return nodeModulesBinDirs(dirname(fileURLToPath(import.meta.url)))
+    const start = dirname(fileURLToPath(moduleUrl))
+    const root = bridgePackageRoot(start)
+    return root === null ? [] : nodeModulesBinDirs(start, root)
   } catch {
     return []
   }
