@@ -41,8 +41,24 @@ export type InjectorStatus = {
     hostNavigation: boolean | null
     error: { kind: string; message: string } | null
   }
-  client: { created: boolean; connection: string | null; lastError: string | null }
+  client: {
+    created: boolean
+    connection: string | null
+    lastError: string | null
+    /** Documents mirrored to the bridge (uri + attach state: pending/opening/open/no-session). */
+    documents: { uri: string; state: string }[]
+  }
   pendingReveal: string | null
+}
+
+function documentSummaries(
+  documents: readonly unknown[] | undefined
+): { uri: string; state: string }[] {
+  if (!Array.isArray(documents)) return []
+  return documents.flatMap((doc) => {
+    const d = doc as { uri?: unknown; state?: unknown } | null
+    return typeof d?.uri === 'string' ? [{ uri: d.uri, state: String(d.state) }] : []
+  })
 }
 
 export type DebugHandle = {
@@ -101,7 +117,8 @@ export function boot(deps: BootDeps): DebugHandle {
         client: {
           created: client !== null,
           connection: clientStatus?.connection ?? null,
-          lastError: clientStatus?.lastError ?? null
+          lastError: clientStatus?.lastError ?? null,
+          documents: documentSummaries(clientStatus?.documents)
         },
         pendingReveal: watcher?.pending?.uri ?? null
       }
@@ -150,9 +167,15 @@ export function boot(deps: BootDeps): DebugHandle {
       notify: (title, body) => notifier?.show({ title, body, timeoutMs: 6_000 }),
       log: log.debug
     })
+    // A second url() call from the same client is a reconnect: the endpoint it got before failed or
+    // dropped (worker crashed or was reaped), so ask the plugin again instead of reusing a cached
+    // ensureBridge result that still points at the dead bridge.
+    let handedOut = false
     client = deps.createClient(monaco, {
       url: async () => {
-        const info = await connector!.waitForInfo()
+        const reconnect = handedOut
+        handedOut = true
+        const info = await connector!.waitForInfo(reconnect ? 0 : undefined)
         lastUrlInfo = info
         return bridgeUrl(info.port, info.token)
       },
@@ -227,7 +250,13 @@ export function boot(deps: BootDeps): DebugHandle {
       onCapture: (m) => {
         monaco = m
         log.debug('Monaco captured')
-        watcher = new RevealWatcher(m.editor, { now: deps.now, frame, log: log.debug })
+        watcher = new RevealWatcher(m.editor, {
+          now: deps.now,
+          frame,
+          log: log.debug,
+          setTimeout: deps.setTimeout,
+          clearTimeout: deps.clearTimeout
+        })
         connector!.start()
         try {
           createClient()

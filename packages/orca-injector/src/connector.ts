@@ -172,7 +172,13 @@ export class BridgeConnector {
    */
   refresh(maxAgeMs = 0): Promise<BridgeInfo> {
     if (this.disposed) return Promise.reject(new BridgeError('error', 'disposed'))
-    if (this.info && this.state === 'available' && this.deps.now() - this.infoAt <= maxAgeMs) {
+    // maxAgeMs 0 always invokes (even within the same millisecond as the cached result).
+    if (
+      maxAgeMs > 0 &&
+      this.info &&
+      this.state === 'available' &&
+      this.deps.now() - this.infoAt <= maxAgeMs
+    ) {
       return Promise.resolve(this.info)
     }
     if (this.inflight) return this.inflight

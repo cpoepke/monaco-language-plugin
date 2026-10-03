@@ -12,7 +12,12 @@ function fakeClient(): LspClientLike & { connection: string; disposed: boolean }
     connection: 'connected',
     disposed: false,
     ready: new Promise<never>(() => {}),
-    status: () => ({ connection: c.connection, hello: null, lastError: null }),
+    status: () => ({
+      connection: c.connection,
+      hello: null,
+      lastError: null,
+      documents: [{ uri: 'file:///repo/a.ts', state: 'open', sessionId: 's1' }]
+    }),
     onDidChangeStatus: () => ({ dispose() {} }),
     request: vi.fn(async () => ({ opened: true })) as LspClientLike['request'],
     dispose: () => {
@@ -121,6 +126,19 @@ describe('injector boot', () => {
     expect(clients).toHaveLength(2)
     expect(clients[0]!.disposed).toBe(true)
     await expect(options[1]!.url()).resolves.toBe('ws://127.0.0.1:5000/?token=other')
+  })
+
+  it('re-invokes ensureBridge on a reconnect instead of reusing the cached endpoint', async () => {
+    const invokeCommand = vi.fn(async () => bridge())
+    const { g, options, handle } = setup({ api: { plugins: { invokeCommand } } })
+    g.monaco = fakeMonaco()
+    await expect(options[0]!.url()).resolves.toBe('ws://127.0.0.1:4000/?token=tok')
+    expect(invokeCommand).toHaveBeenCalledTimes(1) // first connect reuses the capture-time result
+    // The worker crashed and Orca restarted it: the cached result is younger than FRESH_MS.
+    invokeCommand.mockImplementation(async () => bridge(5000, 'new'))
+    await expect(options[0]!.url()).resolves.toBe('ws://127.0.0.1:5000/?token=new')
+    expect(invokeCommand).toHaveBeenCalledTimes(2)
+    expect(handle.status().client.documents).toEqual([{ uri: 'file:///repo/a.ts', state: 'open' }])
   })
 
   it('cross-file navigation goes through host/openLocation', async () => {
