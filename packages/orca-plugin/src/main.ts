@@ -10,7 +10,7 @@
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRealBridge, detectServers } from './bridge-host'
+import { createRealBridge, detectServers, pluginExtraBinDirs } from './bridge-host'
 import { createHostNavigator } from './host-navigator'
 import type { OrcaWorkerApi } from './orca-api'
 import { createOrcaRuntimeClient } from './orca-runtime-client'
@@ -19,6 +19,7 @@ import { createPluginController } from './plugin-controller'
 import type { PluginController } from './plugin-controller'
 import { applyExtendedPath } from './server-path'
 import { PLUGIN_VERSION } from './version'
+import { createWorktreeRoots } from './worktree-roots'
 
 /** dist/main.mjs → plugin root (the folder holding orca-plugin.json). */
 function pluginRootFromEntry(): string | null {
@@ -40,9 +41,15 @@ function createController(): PluginController {
         homedir: homedir()
       })
   })
+  const worktrees = createWorktreeRoots({ runtime })
   return createPluginController({
     createBridge: createRealBridge,
-    hostNavigator: createHostNavigator({ runtime }),
+    hostNavigator: createHostNavigator({ runtime, worktrees }),
+    // Why: without this the bridge would open and read any local file a
+    // client names; Orca's worktrees are exactly what its editor shows.
+    allowedRoots: ({ path: file }) => worktrees.forPath(file),
+    extraBinDirs: pluginExtraBinDirs(),
+    onWorktreesChanged: () => worktrees.invalidate(),
     hostNavigationAvailable: () => runtime.metadataPath() !== null,
     pluginVersion: PLUGIN_VERSION,
     detectServers,

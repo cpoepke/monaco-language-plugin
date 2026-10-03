@@ -42,9 +42,17 @@ describe('orca-plugin.json', () => {
     )
   })
 
-  it('asks only for the notification capability', () => {
+  it('asks only for notifications and worktree events', () => {
     const manifest = pluginManifestSchema.parse(manifestRaw)
-    expect(manifest.capabilities).toEqual([{ kind: 'notifications:show' }])
+    expect(manifest.capabilities).toEqual([
+      { kind: 'notifications:show' },
+      { kind: 'events:subscribe' }
+    ])
+    // Why: worktree.removed must revoke the bridge's access to that tree.
+    expect(manifest.contributes.events).toEqual([
+      { on: 'worktree.created' },
+      { on: 'worktree.removed' }
+    ])
   })
 
   it('rejects broken manifests (schema sanity)', () => {

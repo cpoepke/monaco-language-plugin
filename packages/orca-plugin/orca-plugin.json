@@ -15,7 +15,8 @@
       { "id": "mlp.status", "title": "Language Servers: Status" },
       { "id": "mlp.restart", "title": "Language Servers: Restart" },
       { "id": "mlp.stop", "title": "Language Servers: Stop" }
-    ]
+    ],
+    "events": [{ "on": "worktree.created" }, { "on": "worktree.removed" }]
   },
-  "capabilities": [{ "kind": "notifications:show" }]
+  "capabilities": [{ "kind": "notifications:show" }, { "kind": "events:subscribe" }]
 }

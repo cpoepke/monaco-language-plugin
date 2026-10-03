@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { PROTOCOL_VERSION } from '@mlp/protocol'
 import type { BridgeStatus } from '@mlp/protocol'
 import type { BridgeLogger } from '@mlp/lsp-bridge'
-import type { BridgeFactory, BridgeHandle } from './bridge-host'
+import type { BridgeFactory, BridgeFactoryOptions, BridgeHandle } from './bridge-host'
 import type { HostNavigator } from './host-navigator'
 import { COMMANDS, PLUGIN_DISPLAY_NAME } from './orca-api'
 import type { OrcaWorkerApi } from './orca-api'
@@ -36,6 +36,16 @@ export type StopResult = { stopped: boolean }
 export type PluginControllerDeps = {
   createBridge: BridgeFactory
   hostNavigator: HostNavigator
+  /**
+   * The bridge's dynamic containment: Orca's worktree roots. Documents and
+   * reads outside them are refused (see README, Security).
+   */
+  allowedRoots?: BridgeFactoryOptions['allowedRoots']
+  /** Search dirs for server binaries after PATH (the bundle has no bridge
+   *  package, so no node_modules/.bin of its own). */
+  extraBinDirs?: readonly string[]
+  /** Called on Orca's worktree.created / worktree.removed events. */
+  onWorktreesChanged?: () => void
   /** Cheap, synchronous: is Orca's runtime metadata reachable? */
   hostNavigationAvailable: () => boolean
   pluginVersion: string
@@ -77,7 +87,7 @@ export function createPluginController(deps: PluginControllerDeps): PluginContro
   const idleStopMs = deps.idleStopMs ?? IDLE_STOP_MS
   const idleCheckIntervalMs = deps.idleCheckIntervalMs ?? IDLE_CHECK_INTERVAL_MS
   const randomToken = deps.randomToken ?? (() => randomBytes(32).toString('hex'))
-  const killProcess = deps.killProcess ?? ((pid: number) => process.kill(pid, 'SIGTERM'))
+  const killProcess = deps.killProcess ?? killProcessGroup
 
   let orca: OrcaWorkerApi | null = null
   let running: Running | null = null
@@ -123,6 +133,8 @@ export function createPluginController(deps: PluginControllerDeps): PluginContro
       host: '127.0.0.1',
       token,
       hostNavigator: deps.hostNavigator,
+      ...(deps.allowedRoots ? { allowedRoots: deps.allowedRoots } : {}),
+      ...(deps.extraBinDirs ? { extraBinDirs: deps.extraBinDirs } : {}),
       logger: log,
       // Why: opening a file in an untrusted repo must never run its binaries.
       trustProjectBinaries: false
@@ -312,6 +324,19 @@ export function createPluginController(deps: PluginControllerDeps): PluginContro
     )
     api.commands.register(COMMANDS.restart, () => restart())
     api.commands.register(COMMANDS.stop, () => stop())
+    if (deps.onWorktreesChanged && api.grantedCapabilities.includes('events:subscribe')) {
+      const changed = (): void => {
+        try {
+          deps.onWorktreesChanged?.()
+        } catch (error) {
+          log.warn('worktree change handler failed', { error: String(error) })
+        }
+      }
+      // Why: a removed worktree must stop being readable right away, not
+      // after the 10 s cache; a created one is picked up on a miss anyway.
+      api.events.on('worktree.created', changed)
+      api.events.on('worktree.removed', changed)
+    }
   }
 
   return { activate, deactivate, ensureBridge, status, restart, stop, killServersSync }
@@ -333,6 +358,25 @@ export function summarize(status: StatusResult): string {
   ]
     .filter((line): line is string => line !== null)
     .join('\n')
+}
+
+/**
+ * SIGTERM a language server and everything it started. The bridge spawns
+ * servers detached on POSIX, so each leads its own process group and `-pid`
+ * reaches helpers such as tsserver or gopls workers; signalling only the
+ * leader would orphan them. Falls back to the pid alone (Windows, or a group
+ * that is already gone).
+ */
+export function killProcessGroup(pid: number, signal: NodeJS.Signals = 'SIGTERM'): void {
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-pid, signal)
+      return
+    } catch {
+      // Not a group leader (or already gone): try the pid itself.
+    }
+  }
+  process.kill(pid, signal)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
