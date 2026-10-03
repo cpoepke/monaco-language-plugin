@@ -11,6 +11,7 @@ import {
   adHocSign,
   buildPatchedArchive,
   type CommandRunner,
+  compareVersions,
   defaultRunCommand,
   ensureBackup,
   errnoCode,
@@ -438,7 +439,7 @@ export function createSelfRepair(deps: SelfRepairDeps): SelfRepair {
       const bundled = bundledInjector()?.version ?? null
       const state: PatchStatus['state'] =
         info.injectedBlocks === 1
-          ? bundled && injectorVersion !== bundled
+          ? bundled && (!injectorVersion || compareVersions(injectorVersion, bundled) < 0)
             ? 'outdated'
             : 'patched'
           : readPending(install.asarPath)
