@@ -24,5 +24,6 @@ export type {
   ServerOverrides
 } from './lsp/server-catalog'
 export { defaultExtraBinDirs, resolveExecutable } from './lsp/executable-resolver'
+export { defaultServerProbe, type ProbeResult, type ServerProbe } from './lsp/server-probe'
 export { detectWorkspaceRoot } from './workspace/workspace-root'
 export { BRIDGE_VERSION } from './version'

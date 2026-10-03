@@ -2,16 +2,26 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'claude/**']
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  check:
+    name: lint, typecheck, unit tests + coverage (ubuntu)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -19,15 +29,59 @@ jobs:
       - run: pnpm format:check
       - run: pnpm typecheck
       - run: pnpm build
+      - run: pnpm coverage
+      - name: Coverage summary
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs")
+            if (!fs.existsSync("coverage/coverage-summary.json")) process.exit(0)
+            const t = require("./coverage/coverage-summary.json").total
+            const row = (k) => `| ${k} | ${t[k].pct}% | ${t[k].covered}/${t[k].total} |`
+            const md = ["### Unit test coverage", "", "| Metric | % | Covered |", "|---|---|---|",
+              ...["lines", "statements", "branches", "functions"].map(row), ""].join("\n")
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, md)
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage
+          retention-days: 14
+
+  unit-os:
+    # Why: Orca users are mostly on macOS and Windows, where path, process-group,
+    # socket and asar-swap behaviour differ; nothing else exercises those here.
+    name: unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - run: pnpm test
 
   e2e:
+    name: e2e (demo, injector, Orca simulation)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Why: one known browser dir for all three suites (the injector suite
+      # looks for chromium-*/ here and skips when it finds none).
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw-browsers
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -49,6 +103,7 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: apps/demo
       - run: pnpm --filter demo e2e
+      - run: pnpm --filter @mlp/orca-injector test:e2e
       - run: pnpm --filter orca-sim e2e
         env:
           ORCA_SIM_SKIP_PACKAGES_BUILD: '1'

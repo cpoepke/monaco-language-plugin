@@ -1,11 +1,14 @@
 // Adapted from stablyai/orca PR #14873 (MIT). See vendor/orca-lsp.
 import { join } from 'node:path'
 import { bridgeBinDirs, defaultExtraBinDirs, resolveExecutable } from './executable-resolver'
+import { defaultServerProbe, type ServerProbe } from './server-probe'
 
 export type LspServerDescriptor = {
   serverId: string
   command: string
   args: readonly string[]
+  /** Cheap command that exits 0 when the server is really installed (see server-probe). */
+  probeArgs?: readonly string[]
 }
 
 /** A descriptor whose command was found on disk (absolute path). */
@@ -32,7 +35,8 @@ export const LSP_SERVER_CATALOG: readonly LspServerCatalogEntry[] = [
       {
         serverId: 'typescript-language-server',
         command: 'typescript-language-server',
-        args: ['--stdio']
+        args: ['--stdio'],
+        probeArgs: ['--version']
       },
       { serverId: 'tsgo', command: 'tsgo', args: ['--lsp', '--stdio'] }
     ]
@@ -44,10 +48,16 @@ export const LSP_SERVER_CATALOG: readonly LspServerCatalogEntry[] = [
       { serverId: 'basedpyright', command: 'basedpyright-langserver', args: ['--stdio'] }
     ]
   },
-  { languages: ['go'], candidates: [{ serverId: 'gopls', command: 'gopls', args: [] }] },
+  {
+    languages: ['go'],
+    candidates: [{ serverId: 'gopls', command: 'gopls', args: [], probeArgs: ['version'] }]
+  },
   {
     languages: ['rust'],
-    candidates: [{ serverId: 'rust-analyzer', command: 'rust-analyzer', args: [] }]
+    candidates: [
+      // Why: rustup ships a rust-analyzer proxy even without the component.
+      { serverId: 'rust-analyzer', command: 'rust-analyzer', args: [], probeArgs: ['--version'] }
+    ]
   }
 ]
 
@@ -71,6 +81,8 @@ export type ServerResolutionContext = {
   extraDirs?: readonly string[]
   /** Replaces process.env.PATH (tests). */
   pathEnv?: string
+  /** Checks that a found binary works; `false` skips probing (tests). */
+  probe?: ServerProbe | false
 }
 
 function applyOverride(
@@ -81,6 +93,7 @@ function applyOverride(
   if (!override) {
     return descriptor
   }
+  // Why: an override is the user's explicit choice of binary; don't second-guess it.
   return {
     serverId: descriptor.serverId,
     command: override.command,
@@ -93,16 +106,32 @@ function searchDirs(context: ServerResolutionContext): string[] {
   return [...projectBins, ...(context.extraDirs ?? [...defaultExtraBinDirs(), ...bridgeBinDirs()])]
 }
 
-export function resolveServerDescriptor(
-  descriptor: LspServerDescriptor,
-  context: ServerResolutionContext = {}
-): ResolvedLspServer | null {
+type Lookup = { server: ResolvedLspServer } | { server: null; broken?: string }
+
+function lookupServer(descriptor: LspServerDescriptor, context: ServerResolutionContext): Lookup {
   const effective = applyOverride(descriptor, context.overrides)
   const executablePath = resolveExecutable(effective.command, {
     extraDirs: searchDirs(context),
     ...(context.pathEnv !== undefined ? { pathEnv: context.pathEnv } : {})
   })
-  return executablePath ? { ...effective, executablePath } : null
+  if (!executablePath) {
+    return { server: null }
+  }
+  const probe = context.probe === undefined ? defaultServerProbe : context.probe
+  if (probe && effective.probeArgs) {
+    const verdict = probe(executablePath, effective.probeArgs)
+    if (!verdict.ok) {
+      return { server: null, broken: `${executablePath} (${verdict.reason})` }
+    }
+  }
+  return { server: { ...effective, executablePath } }
+}
+
+export function resolveServerDescriptor(
+  descriptor: LspServerDescriptor,
+  context: ServerResolutionContext = {}
+): ResolvedLspServer | null {
+  return lookupServer(descriptor, context).server
 }
 
 export type ServerResolution = { server: ResolvedLspServer } | { server: null; reason: string }
@@ -115,16 +144,21 @@ export function resolveLspServerForLanguage(
   if (!entry) {
     return { server: null, reason: `unsupported language: ${languageId}` }
   }
+  const broken: string[] = []
   for (const descriptor of entry.candidates) {
-    const resolved = resolveServerDescriptor(descriptor, context)
-    if (resolved) {
-      return { server: resolved }
+    const lookup = lookupServer(descriptor, context)
+    if (lookup.server) {
+      return { server: lookup.server }
+    }
+    if (lookup.broken) {
+      broken.push(lookup.broken)
     }
   }
   const tried = entry.candidates.map((c) => applyOverride(c, context.overrides).command)
+  const brokenNote = broken.length > 0 ? `; found but not working: ${broken.join(', ')}` : ''
   return {
     server: null,
-    reason: `no language server found for ${languageId} (looked for: ${tried.join(', ')})`
+    reason: `no language server found for ${languageId} (looked for: ${tried.join(', ')})${brokenNote}`
   }
 }
 

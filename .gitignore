@@ -11,3 +11,4 @@ __pycache__/
 packages/orca-patcher/assets/
 packages/orca-injector/test/e2e/.fixture-dist/
 coverage/
+.pw-browsers/
