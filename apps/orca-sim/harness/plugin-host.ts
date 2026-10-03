@@ -61,6 +61,11 @@ export type PluginHostOptions = {
   grantedCapabilities: string[]
   /** The Orca main process env the worker env is scrubbed from. */
   mainEnv: NodeJS.ProcessEnv
+  /**
+   * Test hooks added after scrubbing (Orca has no such thing): e.g. MLP_ORCA_EXEC_PATH standing
+   * in for `process.execPath` (the sim's worker runs under plain node, not Orca's binary).
+   */
+  workerEnvExtra?: Record<string, string>
   executeHostCall?: (method: string, params: unknown) => Promise<HostCallOutcome>
   log?: (level: 'info' | 'warn' | 'error', line: string) => void
 }
@@ -82,7 +87,7 @@ type Worker = {
 
 type Manifest = {
   main?: string
-  contributes?: { commands?: { id: string; action?: unknown }[] }
+  contributes?: { commands?: { id: string; action?: unknown }[]; events?: { on: string }[] }
 }
 
 export class SimPluginHost {
@@ -125,6 +130,31 @@ export class SimPluginHost {
     const worker = this.worker
     if (!worker || worker.exited || !worker.child.connected) return
     worker.child.send({ type: 'deliverEvent', eventId: this.nextEventId++, event, payload })
+  }
+
+  /**
+   * plugin-event-delivery.ts `deliverPluginEvent`: for an event the manifest subscribes to, Orca
+   * starts the worker if needed (`workerController.ensure`) and delivers it. Resolves on the ack.
+   */
+  async dispatchEvent(event: string, payload: unknown): Promise<void> {
+    if (!this.manifest.contributes?.events?.some((e) => e.on === event)) {
+      throw new Error(`plugin ${this.options.pluginKey} does not subscribe to ${event}`)
+    }
+    const worker = await this.ensure()
+    const eventId = this.nextEventId++
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${event} was not acked`)), 10_000)
+      const onMessage = (raw: unknown): void => {
+        const message = raw as { type?: string; eventId?: number }
+        if (message?.type === 'eventAck' && message.eventId === eventId) {
+          clearTimeout(timer)
+          worker.child.off('message', onMessage)
+          resolve()
+        }
+      }
+      worker.child.on('message', onMessage)
+      worker.child.send({ type: 'deliverEvent', eventId, event, payload })
+    })
   }
 
   /** Simulate a crash: SIGKILL the worker (the supervisor then restarts it). */
@@ -186,7 +216,7 @@ export class SimPluginHost {
   private start(): Promise<Worker> {
     const tag = `[plugin:${this.options.pluginKey}]`
     const child = fork(ENTRY_PATH, [], {
-      env: buildPluginWorkerEnv(this.options.mainEnv),
+      env: { ...buildPluginWorkerEnv(this.options.mainEnv), ...this.options.workerEnvExtra },
       execArgv: [],
       serialization: 'advanced',
       stdio: ['ignore', 'pipe', 'pipe', 'ipc']

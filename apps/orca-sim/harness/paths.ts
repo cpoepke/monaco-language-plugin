@@ -26,5 +26,9 @@ export const BUILD_REPORT = path.join(DIST_DIR, 'build-report.json')
 export const PLUGIN_KEY = 'cpoepke.monaco-lsp'
 /** The Orca version the fake app.asar claims (Orca main at the time of the spikes). */
 export const SIM_ORCA_VERSION = '1.4.214'
+/** An unpatched app.asar of the same renderer claiming a newer version: what an Orca auto-update
+ *  leaves behind (e2e/auto-repair.spec.ts). */
+export const UPDATE_ASAR = path.join(DIST_DIR, 'app.update.asar')
+export const UPDATE_ORCA_VERSION = '1.4.215'
 
 export const LSP_BRIDGE_BIN = path.join(REPO_ROOT, 'packages', 'lsp-bridge', 'node_modules', '.bin')

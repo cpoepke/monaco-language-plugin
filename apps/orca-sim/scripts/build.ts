@@ -7,7 +7,8 @@
  * 3. Direct patch with the patcher's exported functions → dist/direct: `findAnchorFiles` must find
  *    the Monaco globalAPI anchor in the rolldown-minified chunks, `injectScriptBlock` inserts the
  *    script tag, the bundled injector goes to out/renderer/mlp/injector.js.
- * 4. Full asar path: pack dist/app into dist/orca-install/resources/app.asar, run the patcher's
+ * 4. Full asar path: pack dist/app into dist/orca-install/resources/app.asar (and a "1.4.215"
+ *    copy, dist/app.update.asar, standing in for an Orca update), run the patcher's
  *    `install` (backup, repack, verify, plugin folder), extract the patched archive to
  *    dist/patched (what the e2e tests load), run `uninstall` and check the original bytes are
  *    back, then `install` again so dist/orca-install stays patched for inspection.
@@ -41,7 +42,9 @@ import {
   PATCHER_HOME,
   REPO_ROOT,
   SIM_DIR,
-  SIM_ORCA_VERSION
+  SIM_ORCA_VERSION,
+  UPDATE_ASAR,
+  UPDATE_ORCA_VERSION
 } from '../harness/paths.ts'
 
 const started = Date.now()
@@ -114,6 +117,12 @@ fs.mkdirSync(path.dirname(ASAR_PATH), { recursive: true })
 await asar.createPackage(APP_DIR, ASAR_PATH)
 asar.uncache(ASAR_PATH)
 const pristineSha = sha256(ASAR_PATH)
+// What an Orca auto-update leaves behind: the same renderer, a newer version, no patch.
+const appPackageJson = path.join(APP_DIR, 'package.json')
+const appPackage = fs.readFileSync(appPackageJson, 'utf8')
+fs.writeFileSync(appPackageJson, appPackage.replace(SIM_ORCA_VERSION, UPDATE_ORCA_VERSION))
+await asar.createPackage(APP_DIR, UPDATE_ASAR)
+fs.writeFileSync(appPackageJson, appPackage)
 const common = { app: INSTALL_DIR, stateDir: PATCHER_HOME, logger, force: true }
 
 step('monaco-lsp-orca install')
