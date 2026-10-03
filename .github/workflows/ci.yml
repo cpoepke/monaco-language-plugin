@@ -20,3 +20,43 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Install language servers
+        run: |
+          npm i -g pyright
+          go install golang.org/x/tools/gopls@latest
+          rustup component add rust-analyzer
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          # orca-sim's plugin worker gets a desktop-launch PATH; let it see setup-go's toolchain.
+          echo "ORCA_SIM_EXTRA_PATH=$(dirname "$(command -v go)")" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install Chromium for Playwright (CI only)
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/demo
+      - run: pnpm --filter demo e2e
+      - run: pnpm --filter orca-sim e2e
+        env:
+          ORCA_SIM_SKIP_PACKAGES_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: |
+            apps/demo/test-results
+            apps/orca-sim/test-results
+          retention-days: 7

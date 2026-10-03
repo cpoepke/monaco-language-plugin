@@ -93,7 +93,8 @@ opening a file in an untrusted repository must not execute its code.
 - **"Not found" for a server you installed.** When Orca is started from the Dock or Finder on
   macOS (or from a desktop entry on Linux), it gets a minimal `PATH`, and plugin workers only
   inherit that. Before the first start, the plugin appends the directories that exist among
-  these: `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/go/bin`, `~/.cargo/bin`,
+  these: `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/go/bin`, `/usr/local/go/bin`
+  (gopls needs `go` itself), `~/.cargo/bin`,
   `~/.volta/bin`, `~/.bun/bin`, `~/.npm-global/bin`, pnpm/mise/asdf/fnm shims, and the newest
   `~/.nvm` Node. On Windows it uses `%USERPROFILE%\AppData\Roaming\npm`, `go\bin`, `.cargo\bin`,
   and others. Node-based servers also need `node` on that `PATH`. If yours lives elsewhere,

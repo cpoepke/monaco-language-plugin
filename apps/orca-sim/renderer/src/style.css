@@ -1,0 +1,71 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #1e1e1e;
+  color: #ccc;
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+}
+
+.workbench {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.tab-bar {
+  display: flex;
+  min-height: 32px;
+  background: #252526;
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-right: 1px solid #1e1e1e;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab[aria-selected='true'] {
+  background: #1e1e1e;
+  color: #fff;
+}
+
+.tab-close {
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.editor-pane {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-host {
+  position: relative;
+  height: 100%;
+}
+
+.placeholder {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+}
+
+.placeholder.error {
+  color: #f48771;
+}
