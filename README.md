@@ -14,8 +14,10 @@ The first host is [**Orca**](https://github.com/stablyai/orca), the agent IDE. O
 language-server support today, so you can open a file from your own codebase and click through
 its symbols. A host-agnostic client library and a standalone demo are included as well.
 
-> **Status:** v0.1, experimental. Tested end to end against a high-fidelity Orca simulation and
-> real language servers, but not yet against a real Orca install. Upstream Orca has open,
+> **Status:** v0.1, experimental. Tested end to end against a high-fidelity Orca simulation
+> (`apps/orca-sim`: Orca's bundler and Monaco setup, the real patcher, the real plugin in an Orca-
+> style worker, a fake Orca runtime) and real language servers, but **not yet against a real
+> Orca install**. Upstream Orca has open,
 > unmerged LSP pull requests (#14873, #1912, #24703). If one lands, this integration should be
 > retired.
 
@@ -25,7 +27,7 @@ Orca's plugin API cannot reach its editor, so the integration has two parts:
 
 1. **An Orca plugin (`cpoepke.monaco-lsp`).** It runs the language servers in Orca's plugin
    worker and opens files in Orca tabs through Orca's local runtime API.
-2. **A small injected script.** `npx monaco-lsp-orca install` adds one `<script>` tag to
+2. **A small injected script.** `monaco-lsp-orca install` adds one `<script>` tag to
    Orca's `app.asar`. The script connects Orca's Monaco editor to the plugin over
    `ws://127.0.0.1` with a random token.
 
@@ -58,7 +60,8 @@ Then, one time only, in Orca:
 1. **Settings → Plugins:** turn on the experimental plugin system.
 2. **Install plugin → Local folder:** choose `~/.monaco-lsp-orca/plugin/cpoepke.monaco-lsp`. The
    installer prints the exact path.
-3. Review the permission and **enable** the plugin.
+3. Review the two permissions (show notifications, subscribe to worktree events) and
+   **enable** the plugin.
 4. Restart Orca and open a `.ts`, `.py`, `.go` or `.rs` file, then Cmd/Ctrl+click a symbol.
 
 Other commands:
@@ -81,6 +84,14 @@ Other commands:
   with `--app`, and launch via `AppRun`.
 - **Not supported yet:** remote/SSH worktrees. The editor stays read-only for navigation:
   there is no completion, rename or code actions.
+- **GUI-launched Orca has a minimal `PATH`.** The plugin also searches Homebrew, `/usr/local`,
+  `~/.local/bin`, `~/go/bin`, `/usr/local/go/bin` and `~/.cargo/bin`. gopls also needs `go`
+  itself on that path. Servers installed elsewhere (custom toolchain dirs, version managers
+  that rely on shell init) may not be found; `doctor` shows what is detected.
+- **First results can be slow.** tsserver and rust-analyzer take ~10 s to load a project. Until
+  then, TypeScript may only resolve same-file symbols.
+- In Peek, **double-click** a result to open the file. Enter only previews it (standalone
+  Monaco behaviour).
 - Set `localStorage['mlp.disabled'] = '1'` in Orca's devtools to turn the injector off, or
   `localStorage['mlp.debug'] = '1'` to turn on logging.
 
@@ -139,7 +150,8 @@ pnpm build
 pnpm test            # unit + integration (real language servers when installed)
 pnpm typecheck
 pnpm format:check
-PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers pnpm --filter demo e2e
+pnpm --filter demo e2e       # Playwright: demo app, all four languages
+pnpm --filter orca-sim e2e   # Playwright: full Orca chain (patched renderer → plugin → servers)
 pnpm --filter demo dev   # http://localhost:5173/?root=fixtures/ts&file=src/app.ts
 ```
 
