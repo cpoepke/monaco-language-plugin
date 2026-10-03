@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createHostNavigator, extractWorktreeRoots } from '../src/host-navigator'
 import { findWorktreeRoot, isInside, toOrcaRelativePath } from '../src/worktree-paths'
+import { createWorktreeRoots } from '../src/worktree-roots'
 
 describe('worktree path mapping', () => {
   const roots = ['/work/repo', '/work/repo/.worktrees/feature', '/work/repo-other']
@@ -85,6 +86,45 @@ describe('createHostNavigator', () => {
     clock = 11_000
     await navigate({ path: '/a/x.ts', line: 0, character: 0 })
     expect(runtime.listCalls()).toBe(3)
+  })
+
+  it('matches realpath targets against realpath-resolved worktree roots', async () => {
+    const calls: { method: string; params: unknown }[] = []
+    const call = (async (method: string, params?: unknown) => {
+      calls.push({ method, params })
+      return method === 'worktree.list'
+        ? { worktrees: [{ path: '/tmp/wt' }] }
+        : { opened: true, kind: 'text' }
+    }) as unknown as <T>(method: string, params?: unknown) => Promise<T>
+    const worktrees = createWorktreeRoots({
+      runtime: { call },
+      realpath: (path) => (path === '/tmp/wt' ? '/private/tmp/wt' : path)
+    })
+    const navigate = createHostNavigator({ runtime: { call }, worktrees })
+    await expect(
+      navigate({ path: '/private/tmp/wt/src/a.ts', line: 0, character: 0 })
+    ).resolves.toEqual({ opened: true })
+    expect(calls.at(-1)).toEqual({
+      method: 'files.open',
+      params: { worktree: 'path:/tmp/wt', relativePath: 'src/a.ts', navigation: 'host' }
+    })
+  })
+
+  it('reports an unreachable runtime instead of "outside every worktree"', async () => {
+    const call = (async () => {
+      throw Object.assign(new Error('cannot reach the Orca runtime (ENOENT)'), {
+        code: 'runtime_unavailable'
+      })
+    }) as unknown as <T>(method: string, params?: unknown) => Promise<T>
+    const result = await createHostNavigator({ runtime: { call } })({
+      path: '/a/x.ts',
+      line: 0,
+      character: 0
+    })
+    expect(result).toEqual({
+      opened: false,
+      reason: 'Orca runtime: runtime_unavailable: cannot reach the Orca runtime (ENOENT)'
+    })
   })
 
   it('returns a reason for files outside every worktree', async () => {

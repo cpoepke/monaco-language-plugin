@@ -192,6 +192,14 @@ export type OpenDocumentResult =
       sessionId: null
       /** Why no session was attached (unsupported language, server missing, …). */
       reason: string
+      /**
+       * True when the same open may succeed later without anything changing
+       * on the client's side (session cap reached, initialize timed out,
+       * server exited during startup, bridge shutting down); false when it
+       * will not (unsupported language, server not installed, crash loop).
+       * Absent from older bridges: treat as unknown.
+       */
+      retryable?: boolean
     }
 
 export type ChangeDocumentParams = {

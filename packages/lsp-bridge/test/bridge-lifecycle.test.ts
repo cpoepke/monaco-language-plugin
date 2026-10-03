@@ -1,12 +1,22 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { BridgeMethods, JsonRpcErrorCodes } from '@mlp/protocol'
 import type { BridgeStatus, DiagnosticsParams, OpenDocumentResult } from '@mlp/protocol'
-import { createBridge } from '../src/index'
-import type { Bridge, BridgeOptions } from '../src/index'
+import { createBridge, silentLogger } from '../src/index'
+import type { Bridge, BridgeOptions, ResolvedLspServer } from '../src/index'
+import { SessionManager } from '../src/sessions/session-manager'
+import { activeTreeWatchers } from '../src/workspace/watched-files'
 import {
   FAKE_SERVER_PATH,
   isPidAlive,
@@ -35,6 +45,7 @@ type FakeState = {
   open: Record<string, { version: number; languageId: string; text: string }>
   events: string[]
   cancelled: number[]
+  watchedChanges: { uri: string; type: number }[]
 }
 
 beforeAll(() => {
@@ -331,6 +342,120 @@ describe('session lifecycle (fake server)', () => {
     }
   )
 
+  it.skipIf(process.platform === 'win32')(
+    'rewrites result URIs under a symlinked root back to the client spelling',
+    async () => {
+      const { port } = await startBridge()
+      const client = await connect(port)
+      const direct = await connect(port)
+      const linkRoot = join(base, 'a-link')
+      const linkUri = uriOf(join(linkRoot, 'src', 'one.ts'))
+      const opened = await open(client, join(linkRoot, 'src', 'one.ts'))
+      const position = { textDocument: { uri: linkUri }, position: { line: 0, character: 0 } }
+      // Location (same file), LocationLink (sibling), DocumentLink target.
+      const definition = await client.lsp<{ uri: string }[]>(
+        opened.sessionId,
+        'textDocument/definition',
+        position
+      )
+      expect(definition[0]?.uri).toBe(linkUri)
+      const typeDefinition = await client.lsp<{ targetUri: string }[]>(
+        opened.sessionId,
+        'textDocument/typeDefinition',
+        position
+      )
+      expect(typeDefinition[0]?.targetUri).toBe(uriOf(join(linkRoot, 'src', 'two.ts')))
+      const links = await client.lsp<{ target: string; data: { nested: { uri: string } } }[]>(
+        opened.sessionId,
+        'textDocument/documentLink',
+        { textDocument: { uri: linkUri } }
+      )
+      expect(links[0]?.target).toBe(uriOf(join(linkRoot, 'src', 'two.ts')))
+      // URIs outside the mapped directory stay as the server sent them.
+      expect(links[0]?.data.nested.uri).toBe('file:///elsewhere/x.ts')
+      // A client that opened the real path sees real paths (no cross-talk).
+      const realOpen = await open(direct, join(projectA, 'src', 'one.ts'))
+      expect(realOpen.sessionId).toBe(opened.sessionId)
+      const realDefinition = await direct.lsp<{ uri: string }[]>(
+        realOpen.sessionId,
+        'textDocument/definition',
+        {
+          textDocument: { uri: uriOf(join(projectA, 'src', 'one.ts')) },
+          position: position.position
+        }
+      )
+      expect(realDefinition[0]?.uri).toBe(uriOf(join(projectA, 'src', 'one.ts')))
+    }
+  )
+
+  it('reports watched-file changes to servers that register watchers', async () => {
+    const project = join(base, 'watched')
+    mkdirSync(join(project, 'pkg'), { recursive: true })
+    mkdirSync(join(project, 'node_modules', 'dep'), { recursive: true })
+    writeFileSync(join(project, 'tsconfig.json'), '{}')
+    writeFileSync(join(project, 'main.ts'), 'export {}\n')
+    const watchersBefore = activeTreeWatchers()
+    const { bridge, port } = await startBridge(['--register-watchers'], { idleShutdownMs: 100 })
+    const client = await connect(port)
+    const mainPath = join(project, 'main.ts')
+    const opened = await open(client, mainPath)
+    const capabilities = (await fakeState(client, opened.sessionId, uriOf(mainPath)))
+      .initializeParams.capabilities as unknown as {
+      workspace: { didChangeWatchedFiles: { dynamicRegistration: boolean } }
+    }
+    expect(capabilities.workspace.didChangeWatchedFiles.dynamicRegistration).toBe(true)
+    await pollFor(
+      () => (activeTreeWatchers() > watchersBefore ? true : null),
+      5000,
+      'watcher start'
+    )
+    // Let the watcher settle (Linux registers directories asynchronously).
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    writeFileSync(join(project, 'pkg', 'a.go'), 'package pkg\n')
+    writeFileSync(join(project, 'node_modules', 'dep', 'ignored.go'), 'package dep\n')
+    writeFileSync(join(project, 'notes.txt'), 'not watched\n')
+    writeFileSync(join(project, 'go.mod'), 'module x\n')
+    const created = await pollFor(
+      async () => {
+        const s = await fakeState(client, opened.sessionId, uriOf(mainPath))
+        const uris = s.watchedChanges.map((c) => c.uri)
+        return uris.includes(uriOf(join(project, 'pkg', 'a.go'))) &&
+          uris.includes(uriOf(join(project, 'go.mod')))
+          ? s.watchedChanges
+          : null
+      },
+      5000,
+      'created events'
+    )
+    expect(created).toContainEqual({ uri: uriOf(join(project, 'pkg', 'a.go')), type: 1 })
+    expect(created).toContainEqual({ uri: uriOf(join(project, 'go.mod')), type: 1 })
+    const reported = created.map((c) => c.uri)
+    expect(reported).not.toContain(uriOf(join(project, 'node_modules', 'dep', 'ignored.go')))
+    expect(reported).not.toContain(uriOf(join(project, 'notes.txt')))
+
+    unlinkSync(join(project, 'pkg', 'a.go'))
+    await pollFor(
+      async () => {
+        const s = await fakeState(client, opened.sessionId, uriOf(mainPath))
+        return s.watchedChanges.some(
+          (c) => c.uri === uriOf(join(project, 'pkg', 'a.go')) && c.type === 3
+        )
+          ? true
+          : null
+      },
+      5000,
+      'deleted event'
+    )
+
+    // The watcher goes away with the session.
+    client.notify(BridgeMethods.closeDocument, {
+      sessionId: opened.sessionId,
+      uri: uriOf(mainPath)
+    })
+    await pollFor(() => (bridge.status().sessions.length === 0 ? true : null), 5000, 'idle stop')
+    expect(activeTreeWatchers()).toBe(watchersBefore)
+  })
+
   it('stops idle sessions after idleShutdownMs and restarts on the next open', async () => {
     const { bridge, port } = await startBridge([], { idleShutdownMs: 150 })
     const client = await connect(port)
@@ -387,7 +512,8 @@ describe('session lifecycle (fake server)', () => {
     const refused = await client.openDocument(join(projectB, 'src', 'one.ts'), 'typescript')
     expect(refused).toEqual({
       sessionId: null,
-      reason: 'too many language servers running (max 1)'
+      reason: 'too many language servers running (max 1)',
+      retryable: true
     })
     client.notify(BridgeMethods.closeDocument, { sessionId: a.sessionId, uri: uriOf(aPath) })
     await pollFor(
@@ -418,7 +544,65 @@ describe('session lifecycle (fake server)', () => {
     expect(result.sessionId).toBeNull()
     expect(result.sessionId === null && result.reason).toMatch(/failed to start|exited/)
     expect(result.sessionId === null && result.reason).toContain('no tsserver here')
+    expect(result.sessionId === null && result.retryable).toBe(true)
     expect(bridge.status().sessions).toEqual([])
+  })
+
+  it('marks missing servers and unspawnable binaries as not retryable', async () => {
+    const { port } = await startBridge([], {
+      serverOverrides: {
+        'typescript-language-server': { command: join(base, 'does-not-exist') },
+        tsgo: { command: join(base, 'does-not-exist-either') }
+      }
+    })
+    const client = await connect(port)
+    const result = await client.openDocument(join(projectA, 'src', 'one.ts'), 'typescript')
+    expect(result).toMatchObject({ sessionId: null, retryable: false })
+    expect(result.sessionId === null && result.reason).toMatch(/no language server found/)
+  })
+
+  it('does not evict an idle session another open is about to use', async () => {
+    const server: ResolvedLspServer = {
+      serverId: 'fake',
+      command: process.execPath,
+      args: [FAKE_SERVER_PATH],
+      executablePath: process.execPath
+    }
+    const sessions = new SessionManager({
+      requestTimeoutMs: 5_000,
+      idleShutdownMs: 60_000,
+      maxSessions: 1,
+      logger: silentLogger,
+      notifyClient: () => {}
+    })
+    try {
+      const doc = (root: string, clientId = 1) => {
+        const path = join(root, 'src', 'one.ts')
+        return {
+          clientId,
+          server,
+          rootPath: root,
+          clientUri: uriOf(path),
+          serverUri: uriOf(path),
+          lspLanguageId: 'typescript',
+          text: 'export const one = 1\n'
+        }
+      }
+      const first = await sessions.openDocument(doc(projectA))
+      if (first.sessionId === null) throw new Error(first.reason)
+      sessions.closeDocument(1, first.sessionId, uriOf(join(projectA, 'src', 'one.ts')))
+      // Same tick: the open for A is in flight while B asks for room.
+      const reopen = sessions.openDocument(doc(projectA, 2))
+      const other = sessions.openDocument(doc(projectB, 3))
+      await expect(reopen).resolves.toMatchObject({ sessionId: first.sessionId })
+      await expect(other).resolves.toEqual({
+        sessionId: null,
+        reason: 'too many language servers running (max 1)',
+        retryable: true
+      })
+    } finally {
+      await sessions.closeAll()
+    }
   })
 })
 
@@ -445,6 +629,22 @@ describe('process cleanup', () => {
     const status: BridgeStatus = bridge.status()
     expect(status.sessions).toEqual([])
   })
+
+  it('keeps reporting server pids while close() is still stopping them', async () => {
+    const { bridge, port } = await startBridge(['--ignore-shutdown'])
+    const client = await connect(port)
+    const onePath = join(projectA, 'src', 'one.ts')
+    const opened = await open(client, onePath)
+    const state = await fakeState(client, opened.sessionId, uriOf(onePath))
+    const closing = bridge.close()
+    // Sessions are already detached, but the process is still running: a
+    // host killing servers on exit must still see it.
+    expect(bridge.status().sessions).toEqual([])
+    expect(bridge.serverPids()).toEqual([state.pid])
+    await closing
+    expect(isPidAlive(state.pid)).toBe(false)
+    expect(bridge.serverPids()).toEqual([])
+  }, 15_000)
 
   it('escalates to signals when a server ignores shutdown and SIGTERM', async () => {
     const { bridge, port } = await startBridge(['--ignore-shutdown'])

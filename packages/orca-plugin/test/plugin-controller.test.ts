@@ -1,10 +1,25 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PROTOCOL_VERSION } from '@mlp/protocol'
 import type { BridgeStatus } from '@mlp/protocol'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createRealBridge } from '../src/bridge-host'
 import type { BridgeFactoryOptions, BridgeHandle } from '../src/bridge-host'
 import type { OrcaWorkerApi } from '../src/orca-api'
-import { createPluginController, IDLE_STOP_MS, summarize } from '../src/plugin-controller'
+import {
+  createPluginController,
+  IDLE_STOP_MS,
+  killProcessGroup,
+  summarize
+} from '../src/plugin-controller'
 import type { PluginControllerDeps } from '../src/plugin-controller'
+import {
+  FAKE_SERVER_PATH,
+  isPidAlive,
+  pollFor,
+  TestClient
+} from '../../lsp-bridge/test/helpers/test-client'
 
 type FakeBridge = BridgeHandle & {
   options: BridgeFactoryOptions
@@ -43,11 +58,14 @@ function fakeBridgeFactory() {
 
 function fakeOrca(capabilities: string[] = ['notifications:show']) {
   const handlers = new Map<string, (args: unknown) => unknown>()
+  const events = new Map<string, ((payload: unknown) => unknown)[]>()
   const logs: string[] = []
   const hostCalls: { method: string; params: unknown }[] = []
   const orca: OrcaWorkerApi = {
     commands: { register: (id, handler) => void handlers.set(id, handler) },
-    events: { on: () => {} },
+    events: {
+      on: (event, handler) => void events.set(event, [...(events.get(event) ?? []), handler])
+    },
     host: {
       call: async (method, params) => {
         hostCalls.push({ method, params })
@@ -63,7 +81,10 @@ function fakeOrca(capabilities: string[] = ['notifications:show']) {
     // Orca structured-clones the value across fork() IPC.
     return structuredClone(await handler(args))
   }
-  return { orca, handlers, logs, hostCalls, invoke }
+  const emit = (event: string): void => {
+    for (const handler of events.get(event) ?? []) void handler({})
+  }
+  return { orca, handlers, logs, hostCalls, invoke, events, emit }
 }
 
 let fakes: ReturnType<typeof fakeBridgeFactory>
@@ -167,6 +188,33 @@ describe('mlp.ensureBridge', () => {
     await expect(host.invoke('mlp.ensureBridge')).rejects.toThrow('EADDRINUSE')
     expect(fakes.bridges[0]!.closed).toBe(true)
     await expect(host.invoke('mlp.ensureBridge')).resolves.toMatchObject({ port: 40_001 })
+  })
+})
+
+describe('containment and worktree events', () => {
+  it('passes the dynamic allowedRoots and explicit bin dirs to the bridge', async () => {
+    const allowedRoots = vi.fn(() => ['/work/repo'])
+    setup({ allowedRoots, extraBinDirs: ['/home/me/go/bin'] })
+    await host.invoke('mlp.ensureBridge')
+    const options = fakes.bridges[0]!.options
+    expect(options.allowedRoots).toBe(allowedRoots)
+    expect(options.extraBinDirs).toEqual(['/home/me/go/bin'])
+  })
+
+  it('refreshes worktrees on worktree.created/removed when events are granted', () => {
+    const onWorktreesChanged = vi.fn()
+    host = fakeOrca(['notifications:show', 'events:subscribe'])
+    setup({ onWorktreesChanged })
+    host.emit('worktree.removed')
+    host.emit('worktree.created')
+    host.emit('agent.status.changed')
+    expect(onWorktreesChanged).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not subscribe without the events capability', () => {
+    const onWorktreesChanged = vi.fn()
+    setup({ onWorktreesChanged })
+    expect(host.events.size).toBe(0)
   })
 })
 
@@ -301,6 +349,73 @@ describe('shutdown', () => {
     fakes.bridges[0]!.pids = [11, 12]
     controller.killServersSync()
     expect(killProcess.mock.calls).toEqual([[11], [12]])
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('killServersSync with a real bridge', () => {
+  let project: string
+  beforeAll(() => {
+    project = realpathSync(mkdtempSync(join(tmpdir(), 'mlp-plugin-kill-')))
+    mkdirSync(join(project, 'src'))
+    writeFileSync(join(project, 'tsconfig.json'), '{}')
+    writeFileSync(join(project, 'src', 'a.ts'), 'export const a = 1\n')
+  })
+  afterAll(() => rmSync(project, { recursive: true, force: true }))
+
+  it('kills the server process group, grandchildren included', async () => {
+    const controller = setup({
+      createBridge: (options) =>
+        createRealBridge({
+          ...options,
+          serverOverrides: {
+            'typescript-language-server': {
+              command: process.execPath,
+              args: [FAKE_SERVER_PATH, '--spawn-grandchild']
+            }
+          }
+        }),
+      allowedRoots: () => [project]
+    })
+    const { port, token } = await controller.ensureBridge()
+    const client = await TestClient.connectAndHello(port, token)
+    try {
+      const path = join(project, 'src', 'a.ts')
+      const opened = await client.openDocument(path, 'typescript')
+      if (opened.sessionId === null) throw new Error(opened.reason)
+      const hover = await client.lsp<{ contents: { value: string } }>(
+        opened.sessionId,
+        'textDocument/hover',
+        { textDocument: { uri: opened.uri }, position: { line: 0, character: 0 } }
+      )
+      const state = JSON.parse(hover.contents.value) as { pid: number; grandchildPid: number }
+      expect(isPidAlive(state.grandchildPid)).toBe(true)
+      // The default killProcess, as on process 'exit'.
+      controller.killServersSync()
+      await pollFor(
+        () => (isPidAlive(state.pid) || isPidAlive(state.grandchildPid) ? null : true),
+        5000,
+        'server and grandchild to exit'
+      )
+    } finally {
+      await client.close()
+      await controller.stop()
+    }
+  })
+
+  it('killProcessGroup falls back to the pid when it leads no group', () => {
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid) => {
+      if (typeof pid === 'number' && pid < 0) throw new Error('ESRCH')
+      return true
+    })
+    try {
+      killProcessGroup(1234)
+      expect(kill.mock.calls).toEqual([
+        [-1234, 'SIGTERM'],
+        [1234, 'SIGTERM']
+      ])
+    } finally {
+      kill.mockRestore()
+    }
   })
 })
 

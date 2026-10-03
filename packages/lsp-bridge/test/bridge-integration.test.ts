@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -211,4 +212,53 @@ describe('integration with real language servers', () => {
       INDEX_TIMEOUT_MS * 2
     )
   }
+})
+
+const tsServer = availability.get('typescript')
+
+describe.skipIf(!tsServer || process.platform === 'win32')('symlinked roots (real server)', () => {
+  it(
+    'answers definitions in the client spelling of a symlinked project',
+    async () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'mlp-symlink-int-')))
+      const real = join(base, 'real-ts')
+      const link = join(base, 'linked-ts')
+      cpSync(join(FIXTURES, 'ts'), real, { recursive: true })
+      symlinkSync(real, link)
+      const bridge = createBridge({ port: 0, token: TOKEN })
+      const { port } = await bridge.listen()
+      try {
+        const client = await TestClient.connectAndHello(port, TOKEN)
+        const entryPath = join(link, 'src', 'app.ts')
+        const text = readFileSync(entryPath, 'utf8')
+        const opened = await client.openDocument(entryPath, 'typescript', text)
+        if (opened.sessionId === null) throw new Error(opened.reason)
+        expect(opened.rootPath).toBe(real)
+        const sessionId = opened.sessionId
+        const params = {
+          textDocument: { uri: pathToFileURL(entryPath).toString() },
+          position: positionOf(text, "console.log(greet('world'))", 'greet')
+        }
+        const location = await retryUntil(
+          () =>
+            client.request(BridgeMethods.lspRequest, {
+              sessionId,
+              method: 'textDocument/definition',
+              params
+            }),
+          (result) => {
+            const loc = firstLocation(result)
+            return loc && loc.uri.endsWith('greeter.ts') ? loc : null
+          },
+          'definition through a symlinked root'
+        )
+        expect(location.uri).toBe(pathToFileURL(join(link, 'src', 'greeter.ts')).toString())
+        await client.close()
+      } finally {
+        await bridge.close()
+        rmSync(base, { recursive: true, force: true })
+      }
+    },
+    INDEX_TIMEOUT_MS * 2
+  )
 })

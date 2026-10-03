@@ -10,6 +10,15 @@ import type { SpawnedServer } from './server-spawn'
 const STDERR_TAIL_BYTES = 4096
 const SHUTDOWN_STEP_MS = 2000
 
+/** LSP's RequestCancelled. A cancelled `lsp/request` fails with this code. */
+export const REQUEST_CANCELLED = -32800
+
+export type LspRequestOptions = {
+  timeoutMs?: number
+  /** Aborting sends `$/cancelRequest` and rejects with REQUEST_CANCELLED. */
+  signal?: AbortSignal
+}
+
 export type LspExitInfo = {
   code: number | null
   signal: NodeJS.Signals | null
@@ -39,6 +48,10 @@ type ServerMessage = {
   params?: unknown
   result?: unknown
   error?: JsonRpcError
+}
+
+function cancelledError(method: string): RpcError {
+  return new RpcError(REQUEST_CANCELLED, `Request cancelled: ${method}`)
 }
 
 /** Error the language server itself returned; forwarded to clients verbatim. */
@@ -120,27 +133,63 @@ export class LspConnection {
     return this.stderrTail
   }
 
-  request(method: string, params: unknown, timeoutMs = this.defaultTimeoutMs): Promise<unknown> {
+  request(
+    method: string,
+    params: unknown,
+    options: number | LspRequestOptions = {}
+  ): Promise<unknown> {
+    const { timeoutMs = this.defaultTimeoutMs, signal } =
+      typeof options === 'number' ? { timeoutMs: options } : options
     if (this.exited) {
       return Promise.reject(
         new RpcError(JsonRpcErrorCodes.SessionNotFound, 'Language server exited')
       )
     }
+    if (signal?.aborted) {
+      return Promise.reject(cancelledError(method))
+    }
     const id = this.nextRequestId++
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
+      const abandon = (error: RpcError): void => {
+        if (!this.pending.delete(id)) {
+          return
+        }
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
         // Why: tell the server to stop working on it; a slow server answering
         // late would otherwise burn CPU on a result nobody reads.
         this.notify('$/cancelRequest', { id })
-        reject(
-          new RpcError(JsonRpcErrorCodes.RequestTimeout, `Language server timed out: ${method}`)
-        )
-      }, timeoutMs)
+        reject(error)
+      }
+      const onAbort = (): void => abandon(cancelledError(method))
+      const timer = setTimeout(
+        () =>
+          abandon(
+            new RpcError(JsonRpcErrorCodes.RequestTimeout, `Language server timed out: ${method}`)
+          ),
+        timeoutMs
+      )
       timer.unref()
-      this.pending.set(id, { method, resolve, reject, timer })
+      signal?.addEventListener('abort', onAbort, { once: true })
+      this.pending.set(id, {
+        method,
+        resolve: (result) => {
+          signal?.removeEventListener('abort', onAbort)
+          resolve(result)
+        },
+        reject: (error) => {
+          signal?.removeEventListener('abort', onAbort)
+          reject(error)
+        },
+        timer
+      })
       this.write({ jsonrpc: '2.0', id, method, params })
     })
+  }
+
+  /** Resolves once the process has exited (or never started). */
+  whenExited(): Promise<void> {
+    return this.exitPromise
   }
 
   notify(method: string, params?: unknown): void {

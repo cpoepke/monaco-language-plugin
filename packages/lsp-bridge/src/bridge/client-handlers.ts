@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import {
   BridgeMethods,
@@ -9,6 +10,7 @@ import {
 import type {
   BridgeStatus,
   HelloResult,
+  JsonRpcId,
   OpenDocumentResult,
   OpenLocationResult,
   ReadFileResult
@@ -26,7 +28,7 @@ import {
   expectString,
   readStringFields
 } from '../rpc/params'
-import { pathNotAllowed, RpcError } from '../rpc/rpc-error'
+import { invalidParams, pathNotAllowed, RpcError } from '../rpc/rpc-error'
 import type { SessionManager } from '../sessions/session-manager'
 import type { ClientId } from '../sessions/session-types'
 import { findContainingRoot, realpathLenient } from '../workspace/path-policy'
@@ -43,6 +45,8 @@ export type ClientState = {
   closed: boolean
   /** Realpath'd roots of every session this client opened a document in. */
   usedRoots: Set<string>
+  /** In-flight `lsp/request` calls by the client's JSON-RPC id (lsp/cancel). */
+  pendingRequests: Map<JsonRpcId, AbortController>
 }
 
 export type BridgeContext = {
@@ -55,7 +59,7 @@ export type BridgeContext = {
 }
 
 export type ClientHandlers = {
-  onRequest: (method: string, params: unknown) => unknown
+  onRequest: (method: string, params: unknown, id: JsonRpcId) => unknown
   onNotification: (method: string, params: unknown) => void
 }
 
@@ -84,32 +88,51 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
     }
   }
 
+  /** The allowed root containing `realPath`; null when containment is off.
+   *  Throws PathNotAllowed when containment is on and no root contains it. */
+  async function containingAllowedRoot(realPath: string, uri: unknown): Promise<string | null> {
+    if (!options.allowedRoots) {
+      return null
+    }
+    const roots = await options.allowedRoots({ path: realPath })
+    const root = findContainingRoot(realPath, roots)
+    if (root === null) {
+      throw pathNotAllowed(`Path is outside every allowed root: ${String(uri)}`)
+    }
+    return root
+  }
+
   async function openDocument(params: unknown): Promise<OpenDocumentResult> {
     const record = expectRecord(params)
     const uri = expectString(record.uri, 'uri')
     const languageId = expectString(record.languageId, 'languageId')
     const text = expectString(record.text, 'text')
     const realFile = realpathLenient(filePathFromUri(uri))
-
-    let boundary: string | undefined
-    if (options.allowedRoots.length > 0) {
-      const root = findContainingRoot(realFile, options.allowedRoots)
-      if (root === null) {
-        throw pathNotAllowed(`Document is outside every allowed root: ${uri}`)
-      }
-      boundary = root
-    }
+    const boundary = await containingAllowedRoot(realFile, uri)
     // Why: clients may send react/variant ids (typescriptreact) the catalog
     // doesn't list; the extension still tells us which server family applies.
     const language = isCatalogLanguage(languageId)
       ? languageId
       : (languageIdForPath(realFile) ?? languageId)
     if (!isCatalogLanguage(language)) {
-      return { sessionId: null, reason: `unsupported language: ${languageId}` }
+      return { sessionId: null, reason: `unsupported language: ${languageId}`, retryable: false }
     }
-    const rootPath = realpathLenient(
-      detectWorkspaceRoot(realFile, language, boundary === undefined ? {} : { boundary })
-    )
+    // Why: a session is rooted next to the file and its root becomes readable
+    // through fs/readFile, so a made-up path must not be able to pick one.
+    const info = await stat(realFile).catch(() => null)
+    if (!info?.isFile()) {
+      throw invalidParams(`Not an existing file: ${uri}`)
+    }
+    const detected = detectWorkspaceRoot(realFile, language, boundary === null ? {} : { boundary })
+    if (detected === null) {
+      return {
+        sessionId: null,
+        reason:
+          'refusing to start a language server for a file directly in the home directory or filesystem root',
+        retryable: false
+      }
+    }
+    const rootPath = realpathLenient(detected)
     const resolution = resolveLspServerForLanguage(
       language,
       context.trustProjectBinaries
@@ -117,7 +140,7 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
         : context.resolution
     )
     if (!resolution.server) {
-      return { sessionId: null, reason: resolution.reason }
+      return { sessionId: null, reason: resolution.reason, retryable: false }
     }
     const result = await sessions.openDocument({
       clientId: client.id,
@@ -140,19 +163,36 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
     return result
   }
 
-  function lspRequest(params: unknown): Promise<unknown> {
+  async function lspRequest(params: unknown, id: JsonRpcId): Promise<unknown> {
     const record = expectRecord(params)
     const sessionId = expectString(record.sessionId, 'sessionId')
     const method = expectString(record.method, 'method')
     if (!isAllowedLspMethod(method)) {
       throw new RpcError(JsonRpcErrorCodes.MethodNotAllowed, `LSP method not allowed: ${method}`)
     }
-    return sessions.request(client.id, sessionId, method, record.params)
+    const controller = new AbortController()
+    // Why: a client reusing an id while the first call is in flight is a
+    // client bug; the newest call is the one a cancel refers to.
+    client.pendingRequests.set(id, controller)
+    try {
+      return await sessions.request(client.id, sessionId, method, record.params, controller.signal)
+    } finally {
+      if (client.pendingRequests.get(id) === controller) {
+        client.pendingRequests.delete(id)
+      }
+    }
   }
 
-  function readFile(params: unknown): Promise<ReadFileResult> {
+  async function readFile(params: unknown): Promise<ReadFileResult> {
     const record = expectRecord(params)
-    return readFileForClient(record.uri, [...client.usedRoots, ...options.allowedRoots])
+    const requested = filePathFromUri(record.uri)
+    // Why: with containment on, the allowed roots alone decide (session roots
+    // lie inside them anyway, and a root that was removed since must stop
+    // being readable); without it, only roots of sessions this client used.
+    const roots = options.allowedRoots
+      ? await options.allowedRoots({ path: realpathLenient(requested) })
+      : [...client.usedRoots]
+    return readFileForClient(record.uri, roots)
   }
 
   async function openLocation(params: unknown): Promise<OpenLocationResult> {
@@ -179,7 +219,7 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
     }
   }
 
-  const requestHandlers: Record<string, (params: unknown) => unknown> = {
+  const requestHandlers: Record<string, (params: unknown, id: JsonRpcId) => unknown> = {
     [BridgeMethods.hello]: hello,
     [BridgeMethods.status]: () => context.status(),
     [BridgeMethods.openDocument]: openDocument,
@@ -188,7 +228,7 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
     [BridgeMethods.openLocation]: openLocation
   }
 
-  function onRequest(method: string, params: unknown): unknown {
+  function onRequest(method: string, params: unknown, id: JsonRpcId): unknown {
     if (!client.greeted && method !== BridgeMethods.hello) {
       throw new RpcError(
         JsonRpcErrorCodes.InvalidRequest,
@@ -199,7 +239,7 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
     if (!handler) {
       throw new RpcError(JsonRpcErrorCodes.MethodNotFound, `Method not found: ${method}`)
     }
-    return handler(params)
+    return handler(params, id)
   }
 
   function onNotification(method: string, params: unknown): void {
@@ -216,8 +256,20 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
       if (fields) {
         sessions.closeDocument(client.id, fields.sessionId, fields.uri)
       }
+    } else if (method === BridgeMethods.cancelRequest) {
+      const id = isRecord(params) ? params.id : undefined
+      if (typeof id === 'string' || typeof id === 'number') {
+        // Why: the pending lsp/request then fails with RequestCancelled
+        // (-32800) and the server gets `$/cancelRequest`. Unknown or finished
+        // ids are ignored, as LSP prescribes.
+        client.pendingRequests.get(id)?.abort()
+      }
     }
   }
 
   return { onRequest, onNotification }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
