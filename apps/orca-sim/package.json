@@ -1,0 +1,31 @@
+{
+  "name": "orca-sim",
+  "version": "0.0.0",
+  "private": true,
+  "description": "High-fidelity simulation of Orca's renderer, plugin host and runtime RPC for end-to-end tests of the shipped injector, plugin and patcher.",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "e2e": "node scripts/build.ts && playwright test"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "4.7.0",
+    "monaco-editor": "0.55.1",
+    "react": "~19.2.0",
+    "react-dom": "~19.2.0"
+  },
+  "devDependencies": {
+    "@electron/asar": "^4.3.1",
+    "@mlp/orca-injector": "workspace:*",
+    "@mlp/orca-plugin": "workspace:*",
+    "@playwright/test": "1.56.1",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "monaco-lsp-orca": "workspace:*",
+    "typescript": "~5.9.3",
+    "vite": "npm:rolldown-vite@7.3.1"
+  }
+}
