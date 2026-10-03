@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { languageIdForPath } from '@mlp/protocol'
 import type { ReadFileResult } from '@mlp/protocol'
 import { invalidParams, pathNotAllowed } from '../rpc/rpc-error'
-import { findContainingRoot } from './path-policy'
+import { findContainingRoot, realpathLenient } from './path-policy'
 
 export const MAX_READ_FILE_BYTES = 4 * 1024 * 1024
 const BINARY_SNIFF_BYTES = 8 * 1024
@@ -60,14 +60,16 @@ export async function readFileForClient(
   allowedRoots: readonly string[]
 ): Promise<ReadFileResult> {
   const requestedPath = filePathFromUri(uri)
-  let realPath: string
-  try {
-    realPath = await realpath(requestedPath)
-  } catch {
-    throw invalidParams(`File not found: ${requestedPath}`)
-  }
-  if (findContainingRoot(realPath, allowedRoots) === null) {
+  // Why native: it expands Windows 8.3 short names (C:\Users\RUNNER~1 → runneradmin) the
+  // same way realpathLenient does for the roots; fs.realpathSync's JS version does not.
+  const realPath = await realpath(requestedPath).catch(() => null)
+  // Why containment first, also for missing files: whether a file outside the roots exists is
+  // none of the client's business, and every OS then answers alike (PathNotAllowed).
+  if (findContainingRoot(realPath ?? realpathLenient(requestedPath), allowedRoots) === null) {
     throw pathNotAllowed(`Path is outside every allowed root: ${requestedPath}`)
+  }
+  if (realPath === null) {
+    throw invalidParams(`File not found: ${requestedPath}`)
   }
   // Why: stat before open — opening a FIFO for reading would block forever,
   // and opening a directory fails differently per platform.

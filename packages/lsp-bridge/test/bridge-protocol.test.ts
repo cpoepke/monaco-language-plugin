@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { basename, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
 import { BridgeMethods, bridgeUrl, JsonRpcErrorCodes, PROTOCOL_VERSION } from '@mlp/protocol'
@@ -18,7 +18,7 @@ const bridges: Bridge[] = []
 const clients: TestClient[] = []
 
 beforeAll(() => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'mlp-protocol-')))
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'mlp-protocol-')))
   workspace = join(base, 'ws')
   outsideDir = join(base, 'outside')
   mkdirSync(join(workspace, 'src'), { recursive: true })
@@ -362,6 +362,29 @@ describe('containment', () => {
     expect(queries).toContain(aPath)
   })
 
+  // Regression (Windows): tmpdir() spells the profile as an 8.3 short name (RUNNER~1) while
+  // realpaths use the long one (runneradmin); macOS has /var vs /private/var. Roots and files
+  // named either way must meet in the same canonical form.
+  it('accepts roots and files named through a non-canonical spelling', async () => {
+    const spelledWorkspace = join(tmpdir(), basename(join(workspace, '..')), 'ws')
+    const { port } = await startBridge({ allowedRoots: [spelledWorkspace] })
+    const client = await connect(port)
+    const aPath = join(spelledWorkspace, 'src', 'a.ts')
+    const opened = await client.openDocument(aPath, 'typescript')
+    expect(opened).toMatchObject({ rootPath: workspace })
+    const aUri = pathToFileURL(aPath).href
+    await expect(client.request(BridgeMethods.readFile, { uri: aUri })).resolves.toMatchObject({
+      uri: aUri,
+      text: 'export const a = 1\n'
+    })
+    await expectRpcError(
+      client.request(BridgeMethods.readFile, {
+        uri: pathToFileURL(join(spelledWorkspace, '..', 'outside', 'b.ts')).href
+      }),
+      JsonRpcErrorCodes.PathNotAllowed
+    )
+  })
+
   it('fails closed when the provider throws', async () => {
     const { port } = await startBridge({
       allowedRoots: () => {
@@ -454,7 +477,11 @@ describe('host/openLocation', () => {
     await expect(
       client.request<OpenLocationResult>(BridgeMethods.openLocation, params)
     ).resolves.toEqual({ opened: true })
-    expect(targets).toEqual([{ path: '/tmp/x.ts', line: 3, character: 4 }])
+    // On Windows pathToFileURL('/tmp/x.ts') lies on the current drive (D:\tmp\x.ts).
+    expect(targets).toEqual([{ path: fileURLToPath(params.uri), line: 3, character: 4 }])
+    if (process.platform !== 'win32') {
+      expect(targets[0]?.path).toBe('/tmp/x.ts')
+    }
   })
 
   it('maps navigator failures to HostUnavailable', async () => {

@@ -49,7 +49,7 @@ type FakeState = {
 }
 
 beforeAll(() => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'mlp-lifecycle-')))
+  base = realpathSync.native(mkdtempSync(join(tmpdir(), 'mlp-lifecycle-')))
   projectA = join(base, 'a')
   projectB = join(base, 'b')
   for (const project of [projectA, projectB]) {
@@ -655,7 +655,9 @@ describe('process cleanup', () => {
     const started = Date.now()
     await bridge.close()
     expect(isPidAlive(state.pid)).toBe(false)
-    // shutdown (2 s) + exit wait (2 s) + SIGTERM wait (2 s), then SIGKILL.
-    expect(Date.now() - started).toBeGreaterThanOrEqual(5500)
+    // shutdown (2 s) + exit wait (2 s) + SIGTERM wait (2 s), then SIGKILL. Windows has no
+    // catchable SIGTERM: child.kill('SIGTERM') is TerminateProcess, so the ladder ends there.
+    const ladderMs = process.platform === 'win32' ? 3500 : 5500
+    expect(Date.now() - started).toBeGreaterThanOrEqual(ladderMs)
   }, 15_000)
 })

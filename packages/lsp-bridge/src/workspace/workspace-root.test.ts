@@ -14,7 +14,7 @@ function touch(relative: string, content = ''): string {
 }
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'mlp-root-')))
+  base = realpathSync.native(mkdtempSync(join(tmpdir(), 'mlp-root-')))
 })
 afterEach(() => rmSync(base, { recursive: true, force: true }))
 
@@ -112,7 +112,8 @@ describe('detectWorkspaceRoot', () => {
   })
 
   it('uses an injectable probe (pure function)', () => {
-    const existing = new Set(['/v/proj/go.mod'])
+    // Why join: the probe is asked with host-joined paths (`\v\proj\go.mod` on Windows).
+    const existing = new Set([join('/v/proj', 'go.mod')])
     const probe = { exists: (p: string) => existing.has(p), readText: () => null }
     expect(detectWorkspaceRoot('/v/proj/a/b/c.go', 'go', { probe, home: '/home/me' })).toBe(
       '/v/proj'

@@ -365,7 +365,7 @@ describe('shutdown', () => {
 describe.skipIf(process.platform === 'win32')('killServersSync with a real bridge', () => {
   let project: string
   beforeAll(() => {
-    project = realpathSync(mkdtempSync(join(tmpdir(), 'mlp-plugin-kill-')))
+    project = realpathSync.native(mkdtempSync(join(tmpdir(), 'mlp-plugin-kill-')))
     mkdirSync(join(project, 'src'))
     writeFileSync(join(project, 'tsconfig.json'), '{}')
     writeFileSync(join(project, 'src', 'a.ts'), 'export const a = 1\n')

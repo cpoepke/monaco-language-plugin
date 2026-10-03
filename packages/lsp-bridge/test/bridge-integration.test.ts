@@ -220,7 +220,7 @@ describe.skipIf(!tsServer || process.platform === 'win32')('symlinked roots (rea
   it(
     'answers definitions in the client spelling of a symlinked project',
     async () => {
-      const base = realpathSync(mkdtempSync(join(tmpdir(), 'mlp-symlink-int-')))
+      const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'mlp-symlink-int-')))
       const real = join(base, 'real-ts')
       const link = join(base, 'linked-ts')
       cpSync(join(FIXTURES, 'ts'), real, { recursive: true })

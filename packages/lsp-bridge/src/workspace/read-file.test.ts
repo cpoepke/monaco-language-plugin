@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { JsonRpcErrorCodes } from '@mlp/protocol'
@@ -25,7 +25,7 @@ async function rejection(promise: Promise<unknown>): Promise<RpcError> {
 }
 
 beforeAll(() => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'mlp-read-')))
+  base = realpathSync.native(mkdtempSync(join(tmpdir(), 'mlp-read-')))
   root = join(base, 'root')
   outside = join(base, 'outside')
   mkdirSync(join(root, 'src'), { recursive: true })
@@ -98,6 +98,44 @@ describe('readFileForClient', () => {
     for (const [uri, code] of cases) {
       const error = await rejection(readFileForClient(uri, [root]))
       expect({ uri, code: error.code }).toEqual({ uri, code })
+    }
+  })
+})
+
+// Regression (Windows): tmpdir() is `C:\Users\RUNNER~1\…` (an 8.3 short name) while the
+// realpath is `C:\Users\runneradmin\…`; on macOS it is /var/… vs /private/var/…. A client
+// may name files either way, and roots are canonical: both must agree.
+describe('client spellings that differ from the realpath', () => {
+  const spelled = (...parts: string[]): string => join(tmpdir(), basename(base), ...parts)
+
+  it('reads a file named through the non-canonical spelling', async () => {
+    const uri = pathToFileURL(spelled('root', 'src', 'a.ts')).toString()
+    await expect(readFileForClient(uri, [root])).resolves.toMatchObject({
+      uri,
+      text: 'export const a = 1\n'
+    })
+    const outsideUri = pathToFileURL(spelled('outside', 'secret.txt')).toString()
+    expect((await rejection(readFileForClient(outsideUri, [root]))).code).toBe(
+      JsonRpcErrorCodes.PathNotAllowed
+    )
+  })
+
+  it('answers missing files by containment first, so existence outside never leaks', async () => {
+    const missing = (...parts: string[]) => pathToFileURL(spelled(...parts)).toString()
+    expect((await rejection(readFileForClient(missing('outside', 'nope.ts'), [root]))).code).toBe(
+      JsonRpcErrorCodes.PathNotAllowed
+    )
+    expect((await rejection(readFileForClient(missing('root', 'nope.ts'), [root]))).code).toBe(
+      JsonRpcErrorCodes.InvalidParams
+    )
+  })
+
+  it('canonicalises with the native realpath, also for missing tails', () => {
+    expect(realpathLenient(spelled('root', 'src'))).toBe(join(root, 'src'))
+    expect(realpathLenient(spelled('root', 'new', 'x.ts'))).toBe(join(root, 'new', 'x.ts'))
+    if (process.platform === 'win32') {
+      // NTFS is case-insensitive, drive letters included.
+      expect(isPathInside(join(root, 'src').toUpperCase(), root.toLowerCase())).toBe(true)
     }
   })
 })
