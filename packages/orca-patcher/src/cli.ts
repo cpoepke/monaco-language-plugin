@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util'
 import { PATCHER_VERSION } from './constants.js'
 import { consoleLogger } from './context.js'
 import { doctor, formatDoctor } from './doctor.js'
-import { ExitCode, PatcherError } from './errors.js'
+import { ExitCode, PatcherError } from '@mlp/orca-patch-core'
 import { install } from './install.js'
 import { formatStatus, status } from './status.js'
 import { uninstall } from './uninstall.js'
@@ -12,6 +12,7 @@ const USAGE = `monaco-lsp-orca ${PATCHER_VERSION} — LSP code navigation for Or
 
 Usage:
   monaco-lsp-orca install   [--app <path>] [--dry-run] [--force] [--fix-integrity] [--skip-plugin]
+                            [--no-resign] [--no-auto-repair]
   monaco-lsp-orca uninstall [--app <path>] [--force] [--purge]
   monaco-lsp-orca status    [--app <path>] [--json]
   monaco-lsp-orca doctor    [--json]
@@ -23,7 +24,11 @@ Options:
   --force            Proceed even if Orca seems to be running.
   --fix-integrity    macOS: remove a stale ElectronAsarIntegrity entry from Info.plist.
   --skip-plugin      Do not (re)install the plugin folder.
-  --purge            uninstall: also delete the installed plugin folder.
+  --no-resign        macOS: keep Orca's Developer ID signature instead of re-signing ad hoc
+                     (experimental; saved for self-repair too). Plain \`install\` re-signs again.
+  --no-auto-repair   Do not let the Orca plugin re-apply the patch after Orca updates.
+  --purge            uninstall: also delete the installed plugin folder. (uninstall always turns
+                     auto-repair off, so the plugin does not patch Orca again.)
   --json             Machine-readable output.
 
 Exit codes: 0 ok, 1 error, 2 not patched / needs action.`
@@ -38,6 +43,8 @@ export async function main(argv: string[]): Promise<number> {
       force: { type: 'boolean' },
       'fix-integrity': { type: 'boolean' },
       'skip-plugin': { type: 'boolean' },
+      'no-resign': { type: 'boolean' },
+      'no-auto-repair': { type: 'boolean' },
       purge: { type: 'boolean' },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
@@ -61,7 +68,9 @@ export async function main(argv: string[]): Promise<number> {
         dryRun: values['dry-run'],
         force: values.force,
         fixIntegrity: values['fix-integrity'],
-        skipPlugin: values['skip-plugin']
+        skipPlugin: values['skip-plugin'],
+        resign: values['no-resign'] !== true,
+        autoRepair: values['no-auto-repair'] !== true
       })
       return ExitCode.Ok
     case 'uninstall':

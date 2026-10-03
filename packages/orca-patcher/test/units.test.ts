@@ -6,10 +6,10 @@ import { parseInjectorVersion } from '../src/assets'
 import { PATCHER_VERSION } from '../src/constants'
 import { createContext, silentLogger } from '../src/context'
 import { doctor, findExecutable, searchDirs } from '../src/doctor'
-import { ExitCode } from '../src/errors'
-import { countInjectedBlocks, injectScriptBlock, removeScriptBlocks } from '../src/html'
+import { ExitCode } from '@mlp/orca-patch-core'
+import { countInjectedBlocks, injectScriptBlock, removeScriptBlocks } from '@mlp/orca-patch-core'
 import { asarPathForRoot, candidateAppRoots, resolveTarget } from '../src/locate'
-import { adHocSign, GATEKEEPER_NOTE } from '../src/macos'
+import { adHocSign, GATEKEEPER_NOTE } from '@mlp/orca-patch-core'
 
 describe('html injection', () => {
   const html = '<!doctype html>\n<html>\n<HEAD data-x="1">\n<title>x</title>\n</HEAD>\n</html>\n'

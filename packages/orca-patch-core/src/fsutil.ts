@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import fs from 'node:fs'
+import { fs } from './fs.js'
 import os from 'node:os'
 import path from 'node:path'
 

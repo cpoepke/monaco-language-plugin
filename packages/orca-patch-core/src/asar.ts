@@ -1,4 +1,4 @@
-import fs from 'node:fs'
+import { fs } from './fs.js'
 import path from 'node:path'
 import * as asar from '@electron/asar'
 import { PatcherError } from './errors.js'

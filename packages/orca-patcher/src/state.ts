@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { type Context, chownToInvokingUser } from './context.js'
-import { readJson, writeJsonAtomic } from './fsutil.js'
+import { readJson, writeJsonAtomic } from '@mlp/orca-patch-core'
 
 export type PatchRecord = {
   orcaVersion: string | null

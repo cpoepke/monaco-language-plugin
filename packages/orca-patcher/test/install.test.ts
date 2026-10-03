@@ -2,8 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import * as asar from '@electron/asar'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readAsarFile, readEntries } from '../src/asar'
-import { readBackupMeta } from '../src/backup'
+import { readAsarFile, readEntries } from '@mlp/orca-patch-core'
+import { readBackupMeta } from '@mlp/orca-patch-core'
 import {
   BACKUP_SUFFIX,
   INJECTOR_ASAR_PATH,
@@ -11,8 +11,8 @@ import {
   RENDERER_INDEX,
   VERSION_ASAR_PATH
 } from '../src/constants'
-import { ExitCode, PatcherError } from '../src/errors'
-import { sha256File } from '../src/fsutil'
+import { ExitCode, PatcherError } from '@mlp/orca-patch-core'
+import { sha256File } from '@mlp/orca-patch-core'
 import { install } from '../src/install'
 import { readState } from '../src/state'
 import { status } from '../src/status'

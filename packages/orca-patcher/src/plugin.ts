@@ -3,7 +3,7 @@ import path from 'node:path'
 import { readPluginManifest } from './assets.js'
 import { PLUGIN_KEY } from './constants.js'
 import { type Context, chownToInvokingUser } from './context.js'
-import { replaceDir } from './fsutil.js'
+import { replaceDir } from '@mlp/orca-patch-core'
 
 export const installedPluginDir = (ctx: Context): string =>
   path.join(ctx.stateDir, 'plugin', PLUGIN_KEY)

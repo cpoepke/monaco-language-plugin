@@ -1,28 +1,44 @@
-import fs from 'node:fs'
 import path from 'node:path'
-import { readAsarFile, readEntries, uncache } from './asar.js'
-import { defaultPluginSource, loadInjector } from './assets.js'
-import { backupPaths, type BackupMeta, ensureBackup } from './backup.js'
 import {
+  acquirePatchLockWait,
+  adHocSign,
+  type BackupAction,
+  backupPaths,
+  type BackupMeta,
+  buildPatchedArchive,
+  ensureBackup,
+  findAnchorFiles,
+  handleAsarIntegrity,
   INJECTOR_ASAR_PATH,
-  MONACO_GLOBAL_API_ANCHOR,
-  PATCHER_VERSION,
-  RENDERER_ASSETS_DIR,
+  inspectAsar,
+  isWritable,
+  makeTempDir,
+  type PatchLock,
+  PatcherError,
   RENDERER_INDEX,
-  TMP_SUFFIX,
-  VERSION_ASAR_PATH
-} from './constants.js'
-import { type CommonOptions, type Context, createContext } from './context.js'
-import { PatcherError } from './errors.js'
-import { atomicReplace, isWritable, makeTempDir, removeDir } from './fsutil.js'
-import { countInjectedBlocks, injectScriptBlock } from './html.js'
-import { inspectAsar } from './inspect.js'
+  readEntries,
+  removeDir,
+  removePending,
+  replaceAsar,
+  signingNote,
+  type UserConfig,
+  VERSION_ASAR_PATH,
+  verifyPatched,
+  writeUserConfig,
+  configPath
+} from '@mlp/orca-patch-core'
+import { defaultPluginSource, loadInjector } from './assets.js'
+import { PATCHER_VERSION } from './constants.js'
+import { chownToInvokingUser, type CommonOptions, type Context, createContext } from './context.js'
 import { type OrcaTarget, resolveTarget } from './locate.js'
-import { adHocSign, GATEKEEPER_NOTE, handleAsarIntegrity } from './macos.js'
 import { installPluginFolder, pluginInstructions, type PluginInstallResult } from './plugin.js'
 import { findRunningOrca } from './process.js'
-import { rebuildArchive } from './repack.js'
 import { recordPatch } from './state.js'
+
+export { findAnchorFiles }
+
+/** Tool name recorded in version.json and the lock file. */
+export const PATCHED_BY_CLI = 'monaco-lsp-orca'
 
 export type InstallOptions = CommonOptions & {
   dryRun?: boolean
@@ -36,6 +52,12 @@ export type InstallOptions = CommonOptions & {
   pluginSource?: string
   /** Do not install the plugin folder. */
   skipPlugin?: boolean
+  /** macOS: ad-hoc re-sign Orca.app after patching (default true; `--no-resign` sets false). */
+  resign?: boolean
+  /** Let the Orca plugin re-apply the patch after Orca updates (default true). */
+  autoRepair?: boolean
+  /** How long to wait for the patch lock held by another patcher/the plugin (default 30 s). */
+  lockWaitMs?: number
 }
 
 export type InstallResult = {
@@ -46,8 +68,12 @@ export type InstallResult = {
   /** Renderer chunks that contain the Monaco globalAPI anchor. */
   anchorFiles: string[]
   backup: BackupMeta | null
-  backupAction: 'created' | 'kept' | 'refreshed' | 'none' | 'skipped'
+  backupAction: BackupAction | 'skipped'
   plugin: PluginInstallResult | null
+  /** The settings written to config.json (null on a dry run). */
+  config: UserConfig | null
+  /** macOS: whether the app was re-signed (null elsewhere). */
+  resigned: boolean | null
 }
 
 export async function assertNotRunning(
@@ -84,28 +110,31 @@ export function assertWritable(target: OrcaTarget): void {
   throw new PatcherError(`${target.resourcesDir} is not writable. ${hint}`)
 }
 
-/** Renderer chunks (relative paths) containing the Monaco globalAPI anchor. */
-export function findAnchorFiles(extractedDir: string): string[] {
-  const assetsDir = path.join(extractedDir, ...RENDERER_ASSETS_DIR.split('/'))
-  let names: string[]
-  try {
-    names = fs.readdirSync(assetsDir).filter((n) => n.endsWith('.js'))
-  } catch {
-    return []
-  }
-  return names
-    .filter((n) =>
-      fs.readFileSync(path.join(assetsDir, n), 'utf8').includes(MONACO_GLOBAL_API_ANCHOR)
-    )
-    .map((n) => `${RENDERER_ASSETS_DIR}/${n}`)
+/** Take the patch lock shared with the Orca plugin's self-repair (waits while it is busy). */
+export function lockForPatching(
+  ctx: Context,
+  target: OrcaTarget,
+  waitMs = 30_000
+): Promise<PatchLock> {
+  return acquirePatchLockWait(target.asarPath, {
+    tool: PATCHED_BY_CLI,
+    waitMs,
+    onWait: (owner) =>
+      ctx.logger.info(
+        `Waiting for ${owner ? `${owner.tool} (pid ${owner.pid})` : 'another process'} to finish patching…`
+      )
+  })
 }
 
 export async function install(options: InstallOptions = {}): Promise<InstallResult> {
   const ctx = createContext(options)
   const { logger } = ctx
   const dryRun = options.dryRun === true
+  const resign = options.resign !== false
+  const autoRepair = options.autoRepair !== false
   const target = resolveTarget(ctx, options.app)
   const injector = loadInjector(options.injectorPath)
+  const signsApp = target.appBundle != null && ctx.platform === 'darwin'
   logger.info(`Orca: ${target.asarPath}`)
   if (ctx.invokingUser) {
     logger.info(
@@ -120,66 +149,30 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
     assertWritable(target)
   }
 
-  const originalEntries = readEntries(target.asarPath)
-  const index = originalEntries.get(RENDERER_INDEX)
+  const entries = readEntries(target.asarPath)
+  const index = entries.get(RENDERER_INDEX)
   if (!index || index.type !== 'file') {
     throw new PatcherError(
       `${RENDERER_INDEX} not found in ${target.asarPath}. This Orca build has an unexpected layout; ` +
         'nothing was changed.'
     )
   }
-  const before = inspectAsar(target.asarPath)
-  const orcaVersion = before.orcaVersion
-  logger.info(
-    `Orca version ${orcaVersion ?? 'unknown'}; injector ${injector.version}` +
-      (before.injectedBlocks > 0 ? ' (already patched, updating)' : '')
-  )
-
+  const lock = dryRun ? null : await lockForPatching(ctx, target, options.lockWaitMs)
   const workDir = makeTempDir('mlp-patch-')
   try {
-    let anchorFiles: string[] = []
-    const touched = new Set([RENDERER_INDEX, INJECTOR_ASAR_PATH, VERSION_ASAR_PATH])
-    const rebuilt = await rebuildArchive({
+    const current = inspectAsar(target.asarPath)
+    logger.info(
+      `Orca version ${current.orcaVersion ?? 'unknown'}; injector ${injector.version}` +
+        (current.injectedBlocks > 0 ? ' (already patched, updating)' : '')
+    )
+    const rebuilt = await buildPatchedArchive({
       asarPath: target.asarPath,
       workDir,
-      originalEntries,
-      touched,
-      mutate: (dir) => {
-        anchorFiles = findAnchorFiles(dir)
-        if (anchorFiles.length === 0) {
-          throw new PatcherError(
-            `None of ${RENDERER_ASSETS_DIR}/*.js contains the Monaco anchor\n` +
-              `  ${MONACO_GLOBAL_API_ANCHOR}\n` +
-              'This Orca version bundles Monaco differently, so the injector could not capture it. ' +
-              'Nothing was changed. Please report this together with your Orca version.'
-          )
-        }
-        const indexAbs = path.join(dir, ...RENDERER_INDEX.split('/'))
-        const html = fs.readFileSync(indexAbs, 'utf8')
-        fs.writeFileSync(indexAbs, injectScriptBlock(html))
-        const injectorAbs = path.join(dir, ...INJECTOR_ASAR_PATH.split('/'))
-        fs.mkdirSync(path.dirname(injectorAbs), { recursive: true })
-        fs.writeFileSync(injectorAbs, injector.source)
-        fs.writeFileSync(
-          path.join(dir, ...VERSION_ASAR_PATH.split('/')),
-          `${JSON.stringify(
-            {
-              injectorVersion: injector.version,
-              orcaVersion,
-              patcherVersion: PATCHER_VERSION,
-              patchedAt: new Date().toISOString()
-            },
-            null,
-            2
-          )}\n`
-        )
-      }
+      injector,
+      patcherVersion: PATCHER_VERSION,
+      patchedBy: PATCHED_BY_CLI
     })
-
-    const newHtml = readAsarFile(rebuilt.asar, RENDERER_INDEX)?.toString('utf8') ?? ''
-    if (countInjectedBlocks(newHtml) !== 1 || !readAsarFile(rebuilt.asar, INJECTOR_ASAR_PATH)) {
-      throw new PatcherError('Rebuilt archive is missing the injection; nothing was changed.')
-    }
+    const { anchorFiles, orcaVersion, before } = rebuilt
     logger.info(`Monaco anchor found in ${anchorFiles.join(', ')}`)
 
     if (dryRun) {
@@ -191,7 +184,14 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
           `  inject <script src="./mlp/injector.js"> into ${RENDERER_INDEX}`,
           `  add ${INJECTOR_ASAR_PATH} and ${VERSION_ASAR_PATH}`,
           `  replace ${target.asarPath} atomically (unpacked entries unchanged)`,
-          ...(target.appBundle ? [`  ad-hoc re-sign ${target.appBundle}`] : []),
+          ...(target.appBundle
+            ? [
+                resign
+                  ? `  ad-hoc re-sign ${target.appBundle}`
+                  : '  leave the code signature alone (--no-resign)'
+              ]
+            : []),
+          `  write ${configPath(ctx.stateDir)} (autoRepair: ${autoRepair}, resign: ${resign})`,
           ...(options.skipPlugin
             ? []
             : [`  install the plugin folder into ${path.join(ctx.stateDir, 'plugin')}`])
@@ -205,26 +205,25 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
         anchorFiles,
         backup: null,
         backupAction: 'skipped',
-        plugin: null
+        plugin: null,
+        config: null,
+        resigned: null
       }
     }
 
-    const backup = await ensureBackup(ctx, target, before)
-    atomicReplace(rebuilt.asar, target.asarPath, `${target.asarPath}${TMP_SUFFIX}`)
-    uncache(target.asarPath)
-    const after = inspectAsar(target.asarPath)
-    if (after.injectedBlocks !== 1) {
-      throw new PatcherError(
-        `Verification after writing failed (found ${after.injectedBlocks} injected blocks). ` +
-          'Run `monaco-lsp-orca uninstall` to restore the backup.'
-      )
-    }
+    const backup = await ensureBackup(logger, target.asarPath, before)
+    replaceAsar(rebuilt.asar, target.asarPath)
+    verifyPatched(target.asarPath)
+    // A pending archive (Windows self-repair waiting for Orca to quit) is obsolete now.
+    removePending(target.asarPath)
     logger.info(`Patched ${target.asarPath}`)
 
-    if (target.appBundle && ctx.platform === 'darwin') {
+    let resigned: boolean | null = null
+    if (signsApp && target.appBundle) {
       await handleAsarIntegrity(ctx, target.appBundle, options.fixIntegrity === true)
-      await adHocSign(ctx, target.appBundle)
-      logger.info(GATEKEEPER_NOTE)
+      if (resign) await adHocSign(ctx, target.appBundle)
+      resigned = resign
+      logger.info(signingNote(resign))
     }
 
     recordPatch(ctx, target.asarPath, {
@@ -233,6 +232,8 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
       patcherVersion: PATCHER_VERSION,
       patchedAt: new Date().toISOString()
     })
+    const config = writeUserConfig(ctx.stateDir, { autoRepair, resign })
+    chownToInvokingUser(ctx, configPath(ctx.stateDir))
 
     let plugin: PluginInstallResult | null = null
     if (!options.skipPlugin) {
@@ -249,8 +250,12 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
       )
     }
     logger.info(
-      'Orca updates replace app.asar and remove the patch; run `monaco-lsp-orca status` after ' +
-        'updating and `install` again if needed.'
+      autoRepair
+        ? 'Orca updates replace app.asar and remove the patch. The Orca plugin re-applies it ' +
+            'automatically after an update (restart Orca once when it tells you). Turn that off with ' +
+            '`install --no-auto-repair`.'
+        : 'Auto-repair is off: Orca updates remove the patch; run `monaco-lsp-orca install` again ' +
+            'after updating (`status` tells you when).'
     )
     return {
       target,
@@ -260,9 +265,12 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
       anchorFiles,
       backup: backup.meta,
       backupAction: backup.action,
-      plugin
+      plugin,
+      config,
+      resigned
     }
   } finally {
     removeDir(workDir)
+    lock?.release()
   }
 }
