@@ -77,6 +77,19 @@ describe('extendedPath', () => {
     }
   })
 
+  it('includes the official Go toolchain dir, since gopls needs `go` on PATH', () => {
+    const posix = candidateServerDirs({ platform: 'darwin', homedir: '/Users/me', env: {}, listDir: () => [] })
+    expect(posix).toContain('/usr/local/go/bin')
+    expect(posix.indexOf('/usr/local/go/bin')).toBeGreaterThan(posix.indexOf('/Users/me/go/bin'))
+    const win = candidateServerDirs({
+      platform: 'win32',
+      homedir: 'C:\\Users\\me',
+      env: { USERPROFILE: 'C:\\Users\\me' },
+      listDir: () => []
+    })
+    expect(win).toContain('C:\\Program Files\\Go\\bin')
+  })
+
   it('uses Windows dirs and ; on win32', () => {
     const result = extendedPath({
       platform: 'win32',

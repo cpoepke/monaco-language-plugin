@@ -31,6 +31,8 @@ export function candidateServerDirs(input: PathEnvironment): string[] {
       w.join(profile, 'AppData', 'Roaming', 'npm'),
       w.join(profile, 'AppData', 'Local', 'pnpm'),
       w.join(profile, 'go', 'bin'),
+      // Go's MSI installer; gopls runs `go` itself to load packages.
+      'C:\\Program Files\\Go\\bin',
       w.join(profile, '.cargo', 'bin'),
       w.join(profile, '.volta', 'bin'),
       w.join(profile, '.bun', 'bin'),
@@ -50,6 +52,9 @@ export function candidateServerDirs(input: PathEnvironment): string[] {
     '/sbin',
     p.join(home, '.local', 'bin'),
     p.join(home, 'go', 'bin'),
+    // The official Go installer (macOS .pkg, Linux tarball). gopls lives in ~/go/bin but shells
+    // out to `go` itself; without it every package fails to load and gopls answers nothing.
+    '/usr/local/go/bin',
     p.join(home, '.cargo', 'bin'),
     p.join(home, '.volta', 'bin'),
     p.join(home, '.bun', 'bin'),
