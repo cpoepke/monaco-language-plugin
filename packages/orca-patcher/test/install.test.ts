@@ -2,8 +2,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import * as asar from '@electron/asar'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readAsarFile, readEntries } from '../src/asar'
-import { readBackupMeta } from '../src/backup'
+import {
+  ExitCode,
+  PatcherError,
+  readAsarFile,
+  readBackupMeta,
+  readEntries,
+  readUserConfig,
+  sha256File
+} from '@mlp/orca-patch-core'
 import {
   BACKUP_SUFFIX,
   INJECTOR_ASAR_PATH,
@@ -11,11 +18,10 @@ import {
   RENDERER_INDEX,
   VERSION_ASAR_PATH
 } from '../src/constants'
-import { ExitCode, PatcherError } from '../src/errors'
-import { sha256File } from '../src/fsutil'
+import { main } from '../src/cli'
 import { install } from '../src/install'
 import { readState } from '../src/state'
-import { status } from '../src/status'
+import { formatStatus, status } from '../src/status'
 import { uninstall } from '../src/uninstall'
 import { createContext } from '../src/context'
 import {
@@ -322,5 +328,82 @@ describe('status', () => {
     const report = await status(f.options)
     expect(report.exitCode).toBe(ExitCode.NeedsAction)
     expect(report.actions.join('\n')).toMatch(/9\.9\.9 is installed, 10\.0\.0 is available/)
+  })
+})
+
+const collect = (logs: string[]) => ({
+  info: (m: string) => void logs.push(m),
+  warn: (m: string) => void logs.push(m),
+  error: (m: string) => void logs.push(m)
+})
+
+describe('settings: --no-resign / --no-auto-repair (config.json)', () => {
+  it('the CLI flags are persisted for the self-repair; uninstall turns auto-repair off', async () => {
+    const f = await fake()
+    const logs: string[] = []
+    const defaults = { ...f.options, app: undefined, logger: collect(logs) }
+    expect(
+      await main(['install', '--app', f.appDir, '--no-resign', '--no-auto-repair'], defaults)
+    ).toBe(ExitCode.Ok)
+    expect(readUserConfig(f.stateDir)).toEqual({ autoRepair: false, resign: false, exists: true })
+    expect(logs.join('\n')).toMatch(/Auto-repair is off/)
+    // plain install restores the defaults (re-sign, auto-repair)
+    await main(['install', '--app', f.appDir], defaults)
+    expect(readUserConfig(f.stateDir)).toEqual({ autoRepair: true, resign: true, exists: true })
+    expect(logs.join('\n')).toMatch(/re-applies it\s+automatically after an update/)
+    expect((await status(f.options)).config).toMatchObject({ autoRepair: true, resign: true })
+
+    await uninstall(f.options)
+    expect(readUserConfig(f.stateDir).autoRepair).toBe(false)
+  })
+
+  it('macOS: --no-resign skips codesign and explains both modes; status verifies the signature', async () => {
+    const f = await fake()
+    const bundle = path.join(f.root, 'Orca.app')
+    fs.mkdirSync(path.join(bundle, 'Contents'), { recursive: true })
+    fs.cpSync(path.join(f.appDir, 'resources'), path.join(bundle, 'Contents', 'Resources'), {
+      recursive: true
+    })
+    const calls: string[][] = []
+    const logs: string[] = []
+    const mac = {
+      ...f.options,
+      app: bundle,
+      platform: 'darwin' as const,
+      logger: collect(logs),
+      runCommand: async (command: string, args: string[]) => {
+        calls.push([command, ...args])
+        if (args[0] === '--verify') {
+          return {
+            code: 1,
+            stdout: '',
+            stderr: `${bundle}: a sealed resource is missing or invalid`
+          }
+        }
+        // plutil: no ElectronAsarIntegrity key; ps/codesign: fine
+        return { code: command === 'plutil' ? 1 : 0, stdout: '', stderr: '' }
+      }
+    }
+    const noResign = await install({ ...mac, resign: false })
+    expect(noResign.resigned).toBe(false)
+    expect(calls.some(([c, a]) => c === 'codesign' && a === '--force')).toBe(false)
+    expect(logs.join('\n')).toMatch(
+      /NOT re-signed[\s\S]*Developer ID[\s\S]*damaged[\s\S]*monaco-lsp-orca install/
+    )
+    expect(readUserConfig(f.stateDir).resign).toBe(false)
+
+    const report = await status(mac)
+    expect(report.signature).toEqual({
+      valid: false,
+      detail: `${bundle}: a sealed resource is missing or invalid`
+    })
+    expect(formatStatus(report)).toMatch(/Signing mode:\s+keep the original signature/)
+    expect(formatStatus(report)).toMatch(/codesign:\s+INVALID/)
+
+    logs.length = 0
+    const resigned = await install(mac)
+    expect(resigned.resigned).toBe(true)
+    expect(calls).toContainEqual(['codesign', '--force', '--deep', '--sign', '-', bundle])
+    expect(logs.join('\n')).toMatch(/re-signed ad hoc[\s\S]*--no-resign/)
   })
 })

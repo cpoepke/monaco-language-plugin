@@ -75,6 +75,10 @@ export type OrcaSimOptions = {
   verbose?: boolean
   /** Turn on the injector's debug log (localStorage mlp.debug). */
   injectorDebug?: boolean
+  /** Renderer to load (default: the patched build, dist/patched). */
+  indexHtml?: string
+  /** Test hooks for the worker env, see SimPluginHost `workerEnvExtra`. */
+  workerEnvExtra?: Record<string, string>
 }
 
 export class OrcaSim {
@@ -131,23 +135,30 @@ export class OrcaSim {
         MLP_ORCA_USER_DATA: path.join(this.userData, 'not-user-data'),
         SECRET_TOKEN: 'must-not-leak'
       },
+      ...(options.workerEnvExtra ? { workerEnvExtra: options.workerEnvExtra } : {}),
       log: options.verbose ? (level, line) => console.log(`[plugin ${level}] ${line}`) : undefined
     })
   }
 
   static async launch(browser: Browser, options: OrcaSimOptions = {}): Promise<OrcaSim> {
-    if (!fs.existsSync(PATCHED_INDEX)) {
-      throw new Error(`${PATCHED_INDEX} is missing: run \`pnpm --filter orca-sim build\` first`)
+    const indexHtml = options.indexHtml ?? PATCHED_INDEX
+    if (!fs.existsSync(indexHtml)) {
+      throw new Error(`${indexHtml} is missing: run \`pnpm --filter orca-sim build\` first`)
     }
     const sim = new OrcaSim(options)
     await sim.runtime.start()
     sim.context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
     sim.page = await sim.context.newPage()
     await sim.installPreload()
-    // Orca: mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-    await sim.page.goto(pathToFileURL(PATCHED_INDEX).href)
-    await sim.page.waitForFunction(() => document.body.dataset.simReady === 'true')
+    await sim.loadRenderer(indexHtml)
     return sim
+  }
+
+  /** Orca: mainWindow.loadFile(join(__dirname, '../renderer/index.html')). Also used to simulate
+   *  a restart onto a re-patched app.asar (the preload init scripts run again). */
+  async loadRenderer(indexHtml: string): Promise<void> {
+    await this.page.goto(pathToFileURL(indexHtml).href)
+    await this.page.waitForFunction(() => document.body.dataset.simReady === 'true')
   }
 
   private async installPreload(): Promise<void> {

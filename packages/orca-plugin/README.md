@@ -21,8 +21,10 @@ Orca's local runtime RPC (`files.open`), so the file opens as a normal Orca tab.
    pnpm --filter @mlp/orca-plugin run pack
    ```
    This writes `packages/orca-plugin/release/cpoepke.monaco-lsp/`, which contains
-   `orca-plugin.json`, `dist/main.mjs`, `README.md` and `LICENSE`. `dist/main.mjs` is
-   self-contained, so no `node_modules` is needed.
+   `orca-plugin.json`, `dist/main.mjs`, `dist/apply-pending.mjs`, `assets/injector.js`,
+   `README.md` and `LICENSE`. The `dist/` bundles are self-contained, so no `node_modules` is
+   needed. `assets/injector.js` is the renderer injector the self-repair installs after an Orca
+   update (build `@mlp/orca-injector` first; `pnpm build` at the root does everything).
 2. In Orca, open **Settings → Plugin system** and turn the plugin system on.
 3. Install the folder, using either method:
    - **Install plugin → Local folder**, then enter the full path to
@@ -47,14 +49,63 @@ also appear in Orca's command list.
 | `mlp.status`       | Language Servers: Status                 | `{ running, port, protocolVersion, pluginVersion, hostNavigation, bridge, idleStopInMs }` |
 | `mlp.restart`      | Language Servers: Restart                | the same as `mlp.ensureBridge`, with a new port and token                                 |
 | `mlp.stop`         | Language Servers: Stop                   | `{ stopped: boolean }`                                                                    |
+| `mlp.repairPatch`  | Language Servers: Repair Orca Patch      | `{ state, action, message }` (see [Self-repair](#self-repair-after-orca-updates))         |
 
 - `mlp.ensureBridge` starts the bridge the first time it is called (ephemeral port, random
   32-byte hex token). Later calls return the same values while the bridge runs. Connect to
   `ws://127.0.0.1:<port>/?token=<token>`. `hostNavigation` is `true` when Orca's runtime metadata
   (`orca-runtime.json`) was found, which means cross-file jumps can open real Orca tabs.
-- `mlp.status` shows a notification with a summary (installed and missing servers). Pass
-  `{ silent: true }` as args to skip the notification. `bridge` is the bridge's `BridgeStatus`,
-  or `null` when stopped.
+- `mlp.status` shows a notification with a summary (installed and missing servers, the editor
+  patch). Pass `{ silent: true }` as args to skip the notification. `bridge` is the bridge's
+  `BridgeStatus`, or `null` when stopped. `patch` is
+  `{ state, orcaVersion, injectorVersion, asarPath, autoRepair, lastRepair }` with `state` one of
+  `patched`, `outdated`, `unpatched`, `pending`, `not-found`, `not-orca`, `unknown`.
+- `mlp.repairPatch` checks Orca's `app.asar` right away (even with `autoRepair: false`), repairs
+  it if needed and shows the outcome as a notification. It answers within 25 s; a longer repair
+  finishes in the background and still notifies.
+
+## Self-repair after Orca updates
+
+Orca updates replace `app.asar`, which removes the injected `<script>`; this plugin's folder (in
+Orca's userData) survives. The worker therefore checks its own Orca install and re-applies the
+patch with the same code as the CLI (`@mlp/orca-patch-core`, bundled into `dist/main.mjs`):
+
+- **When:** about 1.5 s after `activate` (activate itself stays instant), at most once per worker
+  lifetime, and on `mlp.repairPatch`. After an update nothing calls the plugin's commands (the
+  injector is gone), so the manifest subscribes to `agent.status.changed`: Orca starts the worker
+  for manifest events, so the check runs soon after Orca launches.
+- **Which install:** the worker is forked from Orca's main process with `ELECTRON_RUN_AS_NODE`, so
+  `process.execPath` is Orca's binary: `<X>.app/Contents/MacOS/<bin>` →
+  `<X>.app/Contents/Resources/app.asar` on macOS, `<dir>/resources/app.asar` elsewhere. Only an
+  archive whose `package.json` name is `orca` is touched (never Electron's default app or another
+  Electron app). All file operations use Electron's `original-fs`, so `app.asar` is treated as a
+  file, not as a directory.
+- **What it does:**
+
+  | Found                                                                | Action                                                                                                                            |
+  | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+  | patched with the shipped injector                                    | nothing                                                                                                                           |
+  | patched with an older injector                                       | upgrade in place (a newer one installed by the CLI is kept)                                                                       |
+  | unpatched, Monaco anchor present                                     | back up the new pristine `app.asar`, patch atomically (temp file + rename), notify "… Restart Orca to activate it."               |
+  | unpatched, no anchor                                                 | notify "This Orca version (x.y.z) isn't supported by Code Navigation yet" (once per version), change nothing                      |
+  | replace fails with `EBUSY`/`EPERM` (Windows: Orca has the file open) | write `app.asar.mlp-pending`, start the detached `dist/apply-pending.mjs` helper, notify "will be re-enabled after you quit Orca" |
+  | `EACCES`/`EROFS` (root-owned deb/rpm, mounted AppImage)              | notify the exact command, e.g. `sudo monaco-lsp-orca install --app "/opt/Orca"`, or the AppImage extraction hint                  |
+  | the CLI holds the patch lock                                         | try again on the next event                                                                                                       |
+
+  On macOS the app is re-signed ad hoc afterwards, like `monaco-lsp-orca install`, unless
+  `resign` is `false`.
+
+- **The helper** runs with Orca's own binary in Node mode, waits (up to 24 h) for Orca's main
+  process (the worker's parent) to exit, checks that `app.asar` is still the one the pending
+  archive was built from and that the archive is valid, swaps it in with one rename, verifies and
+  exits. One helper per install; it never leaves a half-written `app.asar`. Log:
+  `~/.monaco-lsp-orca/logs/apply-pending.log`.
+- **Settings:** `~/.monaco-lsp-orca/config.json` (`{ "autoRepair": true, "resign": true }`,
+  written by `monaco-lsp-orca install`; a missing file means both `true`). `uninstall` sets
+  `autoRepair` to `false`. The last outcome is kept in `~/.monaco-lsp-orca/self-repair.json` and
+  shown by `mlp.status`.
+- **Concurrency:** an exclusive lock file next to `app.asar` (`app.asar.mlp-lock`, shared with the
+  CLI, stale after 2 minutes).
 
 ### Lifecycle and the heartbeat
 
@@ -113,6 +164,9 @@ opening a file in an untrusted repository must not execute its code.
   as well. Outside Orca, set `MLP_ORCA_USER_DATA` to point at the right directory.
 - **Nothing happens at all.** Check that the plugin system is on and the plugin is enabled and
   approved, then run **Language Servers: Status**.
+- **Code navigation is gone after an Orca update.** Wait for the "re-enabled … restart Orca"
+  notification (or run **Language Servers: Repair Orca Patch**) and restart Orca. The
+  notification says what to do when the plugin cannot write to Orca's install.
 
 ## Security
 
@@ -140,10 +194,14 @@ opening a file in an untrusted repository must not execute its code.
   shell. Binaries shipped inside the opened project are never run.
 - The Orca runtime auth token from `orca-runtime.json` (a 0600 file) is used only to call
   `worktree.list` and `files.open`. It is never logged.
-- The plugin asks for two Orca capabilities: `notifications:show` (the status summary) and
-  `events:subscribe` (worktree created/removed, to keep the allowed roots current). Orca's
-  permission dialog states it plainly: like any plugin worker, this one runs as a normal process
-  with your user's permissions.
+- The plugin asks for two Orca capabilities: `notifications:show` (the status summary and the
+  self-repair outcome) and `events:subscribe` (worktree created/removed, to keep the allowed roots
+  current; agent status changes, only to get started after an Orca update; the payload is
+  ignored). Orca's permission dialog states it plainly: like any plugin worker, this one runs as a
+  normal process with your user's permissions.
+- The self-repair modifies Orca's own `app.asar` (and re-signs `Orca.app` on macOS), exactly like
+  `monaco-lsp-orca install`, and only for the Orca install that runs it. Turn it off with
+  `monaco-lsp-orca install --no-auto-repair`.
 
 ## Development
 
@@ -155,6 +213,8 @@ pnpm --filter @mlp/orca-plugin run pack     # release/cpoepke.monaco-lsp/
 ```
 
 Source layout: `main.ts` (entry), `plugin-controller.ts` (commands, idle stop, shutdown),
+`self-repair/` (`locate-orca.ts`, `decide.ts`: pure decisions and messages, `self-repair.ts`:
+effects), `apply-pending.ts` (the helper entry),
 `bridge-host.ts` (the only module that imports `@mlp/lsp-bridge`), `orca-runtime-client.ts`
 (NDJSON runtime RPC), `host-navigator.ts` and `worktree-paths.ts` (`files.open` mapping),
 `orca-user-data.ts`, `server-path.ts`.

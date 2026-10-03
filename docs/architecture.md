@@ -36,6 +36,7 @@ injected script wires them into Orca's editor.
 | `packages/orca-plugin`       | Orca plugin worker        | Starts the bridge on demand, opens files in Orca through its runtime RPC.                                                                            |
 | `packages/orca-injector`     | Orca renderer             | Captures Monaco, connects the client, reveals targets after Orca opens a tab.                                                                        |
 | `packages/orca-patcher`      | user's machine (CLI)      | `npx monaco-lsp-orca install`: adds the injector to Orca's `app.asar`, installs the plugin folder.                                                   |
+| `packages/orca-patch-core`   | CLI + Orca plugin worker  | The patch itself (inspect, anchor check, inject, repack, backup, atomic replace, lock, config, macOS signing, deferred swap), bundled by both.       |
 | `apps/demo`                  | browser + Vite dev server | Standalone test bed: file tree, Monaco and the real bridge. Playwright e2e for all four languages.                                                   |
 
 ## Key decisions
@@ -73,6 +74,40 @@ injected script wires them into Orca's editor.
   `lsp/request` with that JSON-RPC id, which then fails with `-32800` (LSP RequestCancelled).
 - **Watched files.** Servers that register `workspace/didChangeWatchedFiles` watchers (gopls,
   rust-analyzer) get created/changed/deleted events from one watcher per session root.
+
+## Surviving Orca updates
+
+Orca's updater replaces `app.asar`, so the injected `<script>` disappears with every update, while
+the plugin folder in Orca's userData stays. The plugin therefore repairs the patch itself:
+
+```
+Orca update → new app.asar (no injector) → Orca starts → agent.status.changed / worktree event
+  → Orca starts the plugin worker (manifest event) → activate → +1.5 s: self-repair check
+     execPath (Orca's binary) → <resources>/app.asar → package.json name === "orca"?
+     inspect: patched? injector version? Monaco anchor?
+     lock app.asar.mlp-lock → back up the new pristine archive → build the patched archive
+     → rename over app.asar ─ ok ──────────────→ notify "… Restart Orca to activate it."
+                            ├ EBUSY/EPERM (Win) → app.asar.mlp-pending + detached helper
+                            │                     (waits for Orca to exit, renames, verifies)
+                            └ EACCES/EROFS ────→ notify `sudo monaco-lsp-orca install --app …`
+```
+
+- **One implementation.** The CLI and the plugin bundle the same `@mlp/orca-patch-core`, and the
+  plugin folder ships the injector (`assets/injector.js`) it installs. Both take the same O_EXCL
+  lock next to the archive, so they never patch concurrently.
+- **Electron's fs.** Inside Orca the worker runs with `ELECTRON_RUN_AS_NODE`, where `fs` still
+  treats `app.asar` as a directory. The core switches to Electron's built-in `original-fs` there.
+- **Safe while Orca runs.** On macOS and Linux the running Orca keeps the old archive's inode open,
+  so renaming a new `app.asar` over it is safe and takes effect on the next start. Windows refuses
+  the rename while Orca has the file open; the patched archive then waits next to it and a
+  detached helper (Orca's binary in Node mode, `dist/apply-pending.mjs`) swaps it in after Orca's
+  main process exits, after checking that `app.asar` is still the one it was built from.
+- **Opt-out and signing.** `~/.monaco-lsp-orca/config.json` (`autoRepair`, `resign`) is written by
+  the CLI; `uninstall` turns `autoRepair` off. On macOS the repair re-signs ad hoc unless
+  `resign` is false (`install --no-resign`).
+- **Pure decisions.** What to do for which archive state, and the text of every notification, is
+  a pure function (`packages/orca-plugin/src/self-repair/decide.ts`); the e2e suite simulates an
+  update in `apps/orca-sim` (`e2e/auto-repair.spec.ts`).
 
 ## Orca integration facts
 

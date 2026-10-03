@@ -1,9 +1,19 @@
+import {
+  backupPaths,
+  configPath,
+  exists,
+  ExitCode,
+  type ExitCodeValue,
+  inspectAsar,
+  readBackupMeta,
+  readPending,
+  readUserConfig,
+  sha256File,
+  type SignatureCheck,
+  verifyCodeSignature
+} from '@mlp/orca-patch-core'
 import { loadInjector, readPluginManifest } from './assets.js'
-import { backupPaths, readBackupMeta } from './backup.js'
 import { type CommonOptions, createContext } from './context.js'
-import { ExitCode, type ExitCodeValue } from './errors.js'
-import { exists, sha256File } from './fsutil.js'
-import { inspectAsar } from './inspect.js'
 import { type OrcaTarget, resolveTarget } from './locate.js'
 import { installedPluginDir } from './plugin.js'
 import { readState } from './state.js'
@@ -26,6 +36,14 @@ export type StatusReport = {
   bundledInjectorVersion: string | null
   backup: { present: boolean; checksumOk: boolean | null; orcaVersion: string | null }
   plugin: { installed: boolean; dir: string; version: string | null }
+  /** Settings from ~/.monaco-lsp-orca/config.json (defaults when the file is missing). */
+  config: { path: string; exists: boolean; autoRepair: boolean; resign: boolean }
+  /** Who applied the current patch (`monaco-lsp-orca` or the plugin's self-repair). */
+  patchedBy: string | null
+  /** A patched archive waiting for Orca to quit (Windows self-repair). */
+  pending: { orcaVersion: string | null; injectorVersion: string; createdAt: string } | null
+  /** macOS only: `codesign --verify --deep --strict` of the app bundle (best effort). */
+  signature: SignatureCheck | null
   /** Human-readable follow-ups; empty when everything is in place. */
   actions: string[]
   exitCode: ExitCodeValue
@@ -57,13 +75,25 @@ export async function status(options: StatusOptions = {}): Promise<StatusReport>
 
   const pluginDir = installedPluginDir(ctx)
   const manifest = readPluginManifest(pluginDir)
+  const config = readUserConfig(ctx.stateDir)
+  const pending = readPending(target.asarPath)
+  const signature =
+    target.appBundle && ctx.platform === 'darwin'
+      ? await verifyCodeSignature(ctx, target.appBundle)
+      : null
 
   const actions: string[] = []
-  if (!patched) {
+  if (!patched && pending) {
     actions.push(
-      versionChangedSincePatch
-        ? `Orca was updated (${patchedOrcaVersion} → ${info.orcaVersion}) and the update removed the patch. Run \`monaco-lsp-orca install\` again.`
-        : 'Orca is not patched. Run `monaco-lsp-orca install`.'
+      'The Orca plugin re-patched Orca; the change is applied when you quit Orca. Restart Orca to activate it.'
+    )
+  } else if (!patched) {
+    actions.push(
+      versionChangedSincePatch && config.autoRepair
+        ? `Orca was updated (${patchedOrcaVersion} → ${info.orcaVersion}) and the update removed the patch. Start Orca: the plugin re-applies it (or run \`monaco-lsp-orca install\` now).`
+        : versionChangedSincePatch
+          ? `Orca was updated (${patchedOrcaVersion} → ${info.orcaVersion}) and the update removed the patch. Run \`monaco-lsp-orca install\` again.`
+          : 'Orca is not patched. Run `monaco-lsp-orca install`.'
     )
   } else {
     if (info.injectedBlocks > 1)
@@ -96,6 +126,21 @@ export async function status(options: StatusOptions = {}): Promise<StatusReport>
     bundledInjectorVersion,
     backup: { present: backupPresent, checksumOk, orcaVersion: meta?.orcaVersion ?? null },
     plugin: { installed: manifest != null, dir: pluginDir, version: manifest?.version ?? null },
+    config: {
+      path: configPath(ctx.stateDir),
+      exists: config.exists,
+      autoRepair: config.autoRepair,
+      resign: config.resign
+    },
+    patchedBy: info.versionInfo?.patchedBy ?? null,
+    pending: pending
+      ? {
+          orcaVersion: pending.orcaVersion,
+          injectorVersion: pending.injectorVersion,
+          createdAt: pending.createdAt
+        }
+      : null,
+    signature,
     actions,
     exitCode: actions.length === 0 ? ExitCode.Ok : ExitCode.NeedsAction
   }
@@ -109,8 +154,27 @@ export function formatStatus(report: StatusReport): string {
     `Patched:         ${yes(report.patched)}${report.patched ? ` (injector ${report.injectorVersion ?? '?'})` : ''}`,
     `Patched for:     ${report.patchedOrcaVersion ?? '-'}${report.versionChangedSincePatch ? '  (differs from installed version!)' : ''}`,
     `Backup:          ${report.backup.present ? `yes (Orca ${report.backup.orcaVersion ?? '?'}, checksum ${report.backup.checksumOk === false ? 'MISMATCH' : 'ok'})` : 'no'}`,
-    `Plugin folder:   ${report.plugin.installed ? `${report.plugin.dir} (v${report.plugin.version ?? '?'})` : 'not installed'}`
+    `Plugin folder:   ${report.plugin.installed ? `${report.plugin.dir} (v${report.plugin.version ?? '?'})` : 'not installed'}`,
+    `Auto-repair:     ${report.config.autoRepair ? 'on (the Orca plugin re-applies the patch after updates)' : 'off'}`
   ]
+  if (report.patchedBy) lines.splice(3, 0, `Patched by:      ${report.patchedBy}`)
+  if (report.pending) {
+    lines.push(
+      `Pending:         patched archive for Orca ${report.pending.orcaVersion ?? '?'} waits for Orca to quit`
+    )
+  }
+  if (report.signature) {
+    const verdict =
+      report.signature.valid === true
+        ? 'valid'
+        : report.signature.valid === false
+          ? 'INVALID'
+          : 'unknown'
+    lines.push(
+      `Signing mode:    ${report.config.resign ? 'ad-hoc re-sign after patching' : 'keep the original signature (--no-resign)'}`,
+      `codesign:        ${verdict} (${report.signature.detail})`
+    )
+  }
   if (report.actions.length > 0) {
     lines.push('', 'Needs action:', ...report.actions.map((a) => `  - ${a}`))
   } else {

@@ -38,16 +38,28 @@ export type FakeOrca = {
   options: CommonOptions & { injectorPath: string; pluginSource: string }
 }
 
+export type FakeOrcaOptions = {
+  version?: string
+  /** false: the renderer lacks the Monaco globalAPI anchor (an unsupported Orca build). */
+  anchor?: boolean
+  /** package.json name (default `orca`). */
+  name?: string
+}
+
 /** Build the app tree for one Orca version and pack it to `<appDir>/resources/app.asar`. */
 export async function packFakeOrca(
   root: string,
   appDir: string,
-  opts: { version?: string; anchor?: boolean } = {}
+  opts: FakeOrcaOptions = {}
 ): Promise<string> {
   const src = fs.mkdtempSync(path.join(root, 'src-'))
   write(
     path.join(src, 'package.json'),
-    JSON.stringify({ name: 'orca', version: opts.version ?? '1.4.214', main: 'out/main/index.js' })
+    JSON.stringify({
+      name: opts.name ?? 'orca',
+      version: opts.version ?? '1.4.214',
+      main: 'out/main/index.js'
+    })
   )
   write(path.join(src, 'out/main/index.js'), 'console.log("main")\n')
   write(path.join(src, 'out/renderer/index.html'), ORIGINAL_INDEX_HTML)
@@ -70,9 +82,7 @@ export async function packFakeOrca(
 
 export const noProcesses: CommandRunner = async () => ({ code: 0, stdout: '', stderr: '' })
 
-export async function makeFakeOrca(
-  opts: { version?: string; anchor?: boolean } = {}
-): Promise<FakeOrca> {
+export async function makeFakeOrca(opts: FakeOrcaOptions = {}): Promise<FakeOrca> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mlp-fake-orca-'))
   const appDir = path.join(root, 'Orca')
   const asarPath = await packFakeOrca(root, appDir, opts)

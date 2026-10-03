@@ -35,7 +35,8 @@ export const COMMANDS = {
   ensureBridge: 'mlp.ensureBridge',
   status: 'mlp.status',
   restart: 'mlp.restart',
-  stop: 'mlp.stop'
+  stop: 'mlp.stop',
+  repairPatch: 'mlp.repairPatch'
 } as const
 
 export const PLUGIN_DISPLAY_NAME = 'Code Navigation (LSP)'

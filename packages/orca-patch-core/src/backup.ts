@@ -1,9 +1,8 @@
-import fs from 'node:fs'
+import { fs } from './fs.js'
 import { BACKUP_META_SUFFIX, BACKUP_SUFFIX } from './constants.js'
-import type { Context } from './context.js'
 import { exists, readJson, sha256File, writeJsonAtomic } from './fsutil.js'
 import { type AsarInspection, readOrcaVersion } from './inspect.js'
-import type { OrcaTarget } from './locate.js'
+import type { Logger } from './logger.js'
 
 export type BackupMeta = {
   sha256: string
@@ -54,34 +53,36 @@ export function removeBackup(asarPath: string): void {
  *  - Current archive is patched but there is no backup → none can be made; uninstall will strip
  *    the injection instead of restoring.
  */
+export type BackupAction = 'created' | 'kept' | 'refreshed' | 'none'
+
 export async function ensureBackup(
-  ctx: Context,
-  target: OrcaTarget,
+  logger: Logger,
+  asarPath: string,
   current: AsarInspection
-): Promise<{ action: 'created' | 'kept' | 'refreshed' | 'none'; meta: BackupMeta | null }> {
-  const { backup } = backupPaths(target.asarPath)
-  const meta = readBackupMeta(target.asarPath)
+): Promise<{ action: BackupAction; meta: BackupMeta | null }> {
+  const { backup } = backupPaths(asarPath)
+  const meta = readBackupMeta(asarPath)
   const currentPatched = current.injectedBlocks > 0 || current.versionInfo != null
   if (exists(backup) && meta) {
     if (currentPatched) {
-      ctx.logger.info(`Keeping existing backup ${backup}`)
+      logger.info(`Keeping existing backup ${backup}`)
       return { action: 'kept', meta }
     }
-    const sha = await sha256File(target.asarPath)
+    const sha = await sha256File(asarPath)
     if (sha === meta.sha256) return { action: 'kept', meta }
-    ctx.logger.info(
+    logger.info(
       `Orca changed since the last backup (${meta.orcaVersion ?? '?'} → ${current.orcaVersion ?? '?'}); ` +
         'refreshing the backup.'
     )
-    return { action: 'refreshed', meta: await writeBackup(target.asarPath) }
+    return { action: 'refreshed', meta: await writeBackup(asarPath) }
   }
   if (currentPatched) {
-    ctx.logger.warn(
+    logger.warn(
       'Orca is already patched but no backup exists; uninstall will remove the injection in place.'
     )
     return { action: 'none', meta: null }
   }
-  const created = await writeBackup(target.asarPath)
-  ctx.logger.info(`Backup: ${backup} (sha256 ${created.sha256.slice(0, 12)}…)`)
+  const created = await writeBackup(asarPath)
+  logger.info(`Backup: ${backup} (sha256 ${created.sha256.slice(0, 12)}…)`)
   return { action: 'created', meta: created }
 }

@@ -6,6 +6,8 @@ export type InjectedVersionInfo = {
   injectorVersion: string
   orcaVersion: string | null
   patcherVersion?: string
+  /** Who applied the patch: `monaco-lsp-orca` (CLI) or `cpoepke.monaco-lsp` (plugin self-repair). */
+  patchedBy?: string
   patchedAt?: string
 }
 
@@ -17,15 +19,23 @@ export type AsarInspection = {
   versionInfo: InjectedVersionInfo | null
 }
 
-export function readOrcaVersion(asarPath: string): string | null {
+/** `name` and `version` from the archive's package.json (null fields when unreadable). */
+export function readAppPackage(asarPath: string): { name: string | null; version: string | null } {
   const buf = readAsarFile(asarPath, 'package.json')
-  if (!buf) return null
+  if (!buf) return { name: null, version: null }
   try {
-    const pkg = JSON.parse(buf.toString('utf8')) as { version?: unknown }
-    return typeof pkg.version === 'string' ? pkg.version : null
+    const pkg = JSON.parse(buf.toString('utf8')) as { name?: unknown; version?: unknown }
+    return {
+      name: typeof pkg.name === 'string' ? pkg.name : null,
+      version: typeof pkg.version === 'string' ? pkg.version : null
+    }
   } catch {
-    return null
+    return { name: null, version: null }
   }
+}
+
+export function readOrcaVersion(asarPath: string): string | null {
+  return readAppPackage(asarPath).version
 }
 
 export function inspectAsar(asarPath: string): AsarInspection {

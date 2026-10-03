@@ -1,17 +1,17 @@
-import { execFile, execFileSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { HOME_DIRNAME, HOME_ENV } from './constants.js'
+import {
+  type CommandRunner,
+  defaultRunCommand,
+  type Logger,
+  patcherHome,
+  silentLogger
+} from '@mlp/orca-patch-core'
 
-export type Logger = {
-  info(message: string): void
-  warn(message: string): void
-  error(message: string): void
-}
-
-export type CommandResult = { code: number; stdout: string; stderr: string }
-export type CommandRunner = (command: string, args: string[]) => Promise<CommandResult>
+export type { CommandResult, CommandRunner, Logger } from '@mlp/orca-patch-core'
+export { defaultRunCommand, silentLogger }
 
 /** Process/filesystem hooks used to handle `sudo` (injectable for tests). */
 export type SystemHooks = {
@@ -58,26 +58,6 @@ export const consoleLogger: Logger = {
   warn: (m) => console.warn(`warning: ${m}`),
   error: (m) => console.error(`error: ${m}`)
 }
-
-export const silentLogger: Logger = { info() {}, warn() {}, error() {} }
-
-export const defaultRunCommand: CommandRunner = (command, args) =>
-  new Promise((resolve) => {
-    execFile(
-      command,
-      args,
-      { maxBuffer: 16 * 1024 * 1024, windowsHide: true },
-      (error, stdout, stderr) => {
-        const code =
-          error == null ? 0 : typeof error.code === 'number' ? error.code : error.code ? 127 : 1
-        resolve({
-          code,
-          stdout: String(stdout ?? ''),
-          stderr: String(stderr ?? error?.message ?? '')
-        })
-      }
-    )
-  })
 
 // POSIX portable user names (plus the `$` Samba machine accounts use); anything else is refused
 // before it gets near a shell.
@@ -148,7 +128,7 @@ export function createContext(options: CommonOptions = {}): Context {
   const invokingUser = resolveInvokingUser(platform, env, system)
   // Why: under sudo os.homedir() is root's; state and the plugin folder belong to the user.
   const homeDir = options.homeDir ?? invokingUser?.home ?? os.homedir()
-  const stateDir = options.stateDir ?? env[HOME_ENV] ?? path.join(homeDir, HOME_DIRNAME)
+  const stateDir = options.stateDir ?? patcherHome(env, homeDir)
   return {
     platform,
     env,

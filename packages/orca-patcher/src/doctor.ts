@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { type CommonOptions, createContext } from './context.js'
-import { ExitCode, type ExitCodeValue } from './errors.js'
+import { ExitCode, type ExitCodeValue } from '@mlp/orca-patch-core'
 
 type Platform = NodeJS.Platform
 

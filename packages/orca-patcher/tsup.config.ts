@@ -8,5 +8,8 @@ export default defineConfig({
   sourcemap: false,
   clean: true,
   dts: false,
+  // Why: the shared patch core is a private workspace package; inline it (the published CLI only
+  // depends on @electron/asar).
+  noExternal: ['@mlp/orca-patch-core'],
   external: ['@electron/asar']
 })

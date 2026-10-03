@@ -115,12 +115,13 @@ afterEach(() => {
 })
 
 describe('activate', () => {
-  it('registers the four manifest commands synchronously, without starting anything', () => {
+  it('registers the manifest commands synchronously, without starting anything', () => {
     const started = performance.now()
     setup()
     expect(performance.now() - started).toBeLessThan(1_000)
     expect([...host.handlers.keys()].sort()).toEqual([
       'mlp.ensureBridge',
+      'mlp.repairPatch',
       'mlp.restart',
       'mlp.status',
       'mlp.stop'
@@ -279,12 +280,21 @@ describe('mlp.stop / mlp.restart / mlp.status', () => {
         clients: 2,
         sessions: [],
         servers: { gopls: '/x/gopls', pyright: null }
+      },
+      patch: {
+        state: 'pending',
+        orcaVersion: '1.4.215',
+        injectorVersion: null,
+        asarPath: '/opt/Orca/resources/app.asar',
+        autoRepair: true,
+        lastRepair: null
       }
     })
     expect(text).toContain('127.0.0.1:1234')
     expect(text).toContain('Installed: gopls')
     expect(text).toContain('Not found: pyright')
     expect(text).toContain('Orca runtime not found')
+    expect(text).toContain('Editor patch: applied when you quit Orca (Orca 1.4.215)')
   })
 })
 

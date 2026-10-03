@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Context } from './context.js'
-import { PatcherError } from './errors.js'
+import { PatcherError } from '@mlp/orca-patch-core'
 
 export type OrcaTargetKind = 'macos-app' | 'windows' | 'linux' | 'appimage-extracted' | 'custom'
 

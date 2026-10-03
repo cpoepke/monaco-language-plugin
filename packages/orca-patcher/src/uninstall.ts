@@ -1,24 +1,37 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { readEntries, uncache } from './asar.js'
-import { backupPaths, readBackupMeta, removeBackup } from './backup.js'
 import {
+  adHocSign,
+  atomicReplace,
+  backupPaths,
+  configPath,
+  exists,
   INJECTOR_ASAR_PATH,
+  inspectAsar,
+  makeTempDir,
+  PatcherError,
+  readBackupMeta,
+  readEntries,
+  readOrcaVersion,
+  readUserConfig,
+  rebuildArchive,
+  removeBackup,
+  removeDir,
+  removePending,
+  removeScriptBlocks,
   RENDERER_DIR,
   RENDERER_INDEX,
+  sha256File,
   TMP_SUFFIX,
-  VERSION_ASAR_PATH
-} from './constants.js'
-import { type CommonOptions, createContext } from './context.js'
-import { PatcherError } from './errors.js'
-import { atomicReplace, exists, makeTempDir, removeDir, sha256File } from './fsutil.js'
-import { removeScriptBlocks } from './html.js'
-import { inspectAsar, readOrcaVersion } from './inspect.js'
-import { assertNotRunning, assertWritable } from './install.js'
+  uncache,
+  verifyCodeSignature,
+  VERSION_ASAR_PATH,
+  writeUserConfig
+} from '@mlp/orca-patch-core'
+import { chownToInvokingUser, type CommonOptions, createContext } from './context.js'
+import { assertNotRunning, assertWritable, lockForPatching } from './install.js'
 import { type OrcaTarget, resolveTarget } from './locate.js'
-import { adHocSign } from './macos.js'
 import { installedPluginDir } from './plugin.js'
-import { rebuildArchive } from './repack.js'
 import { forgetPatch } from './state.js'
 
 export type UninstallOptions = CommonOptions & {
@@ -40,6 +53,24 @@ export async function uninstall(options: UninstallOptions = {}): Promise<Uninsta
   logger.info(`Orca: ${target.asarPath}`)
   await assertNotRunning(ctx, target, options.force)
   assertWritable(target)
+  const lock = await lockForPatching(ctx, target)
+  try {
+    return await uninstallLocked(ctx, target, options)
+  } finally {
+    lock.release()
+  }
+}
+
+async function uninstallLocked(
+  ctx: ReturnType<typeof createContext>,
+  target: OrcaTarget,
+  options: UninstallOptions
+): Promise<UninstallResult> {
+  const { logger } = ctx
+  // Why first: otherwise the plugin's self-repair would patch Orca again on its next start.
+  writeUserConfig(ctx.stateDir, { autoRepair: false })
+  chownToInvokingUser(ctx, configPath(ctx.stateDir))
+  removePending(target.asarPath)
 
   const current = inspectAsar(target.asarPath)
   const patched = current.injectedBlocks > 0 || current.versionInfo != null
@@ -88,12 +119,22 @@ export async function uninstall(options: UninstallOptions = {}): Promise<Uninsta
     }
     action = restored ? 'restored' : 'stripped'
     if (target.appBundle && ctx.platform === 'darwin') {
-      await adHocSign(ctx, target.appBundle)
-      logger.info(
-        'macOS: Orca.app is still ad-hoc signed (app.asar is restored, the Developer ID signature is ' +
-          'not). Reinstall Orca from the official download to fully revert, including keychain ' +
-          'access, privacy (TCC) grants and auto-update.'
-      )
+      const { resign } = readUserConfig(ctx.stateDir)
+      // Why: in --no-resign mode the Developer ID signature was never replaced, so restoring the
+      // original app.asar makes it valid again; only re-sign if it still does not verify.
+      const check = resign ? null : await verifyCodeSignature(ctx, target.appBundle)
+      if (check?.valid === true) {
+        logger.info(
+          'macOS: the original Developer ID signature verifies again (codesign --verify).'
+        )
+      } else {
+        await adHocSign(ctx, target.appBundle)
+        logger.info(
+          'macOS: Orca.app is still ad-hoc signed (app.asar is restored, the Developer ID signature is ' +
+            'not). Reinstall Orca from the official download to fully revert, including keychain ' +
+            'access, privacy (TCC) grants and auto-update.'
+        )
+      }
     }
   }
   forgetPatch(ctx, target.asarPath)

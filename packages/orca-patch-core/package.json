@@ -1,0 +1,23 @@
+{
+  "name": "@mlp/orca-patch-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Patch core shared by the monaco-lsp-orca CLI and the Orca plugin's self-repair: inspect, inject, repack and atomically replace Orca's app.asar.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./constants": "./src/constants.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@electron/asar": "^4.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0"
+  }
+}

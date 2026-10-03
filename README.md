@@ -60,26 +60,45 @@ Then, one time only, in Orca:
 1. **Settings → Plugins:** turn on the experimental plugin system.
 2. **Install plugin → Local folder:** choose `~/.monaco-lsp-orca/plugin/cpoepke.monaco-lsp`. The
    installer prints the exact path.
-3. Review the two permissions (show notifications, subscribe to worktree events) and
-   **enable** the plugin.
+3. Review the two permissions (show notifications, subscribe to events) and **enable** the
+   plugin.
 4. Restart Orca and open a `.ts`, `.py`, `.go` or `.rs` file, then Cmd/Ctrl+click a symbol.
 
 Other commands:
 
-- `status`: is Orca patched? Did an update remove the patch?
-- `uninstall`: restores the original `app.asar` from the backup. `--purge` also removes the
-  plugin folder.
+- `status`: is Orca patched? Did an update remove the patch? Signing mode and auto-repair setting.
+- `uninstall`: restores the original `app.asar` from the backup and turns auto-repair off.
+  `--purge` also removes the plugin folder.
+- `install --no-auto-repair`: don't let the plugin re-patch Orca after updates.
+- `install --no-resign` (macOS): keep Orca's Developer ID signature, see below.
 - `--app <path>`: point at a non-default install. Accepts `Orca.app`, the install dir,
   `resources/` or an extracted AppImage `squashfs-root`.
 
 ### Caveats
 
-- **Orca updates remove the patch.** Run `install` again after each update; `status` tells you
-  when it's needed.
-- **macOS:** the app is ad-hoc re-signed after patching, which replaces Orca's Developer ID
-  signature. Expect keychain/privacy prompts again. Auto-update may refuse until you reinstall
-  Orca from the official download, which is also the only way to restore the original
-  signature.
+- **Orca updates remove the patch; the plugin puts it back, and you restart once.** The plugin
+  folder survives updates. Soon after Orca starts (Orca wakes the plugin on the first agent
+  status change or worktree event), the plugin notices that the update removed the injected
+  script, patches the new `app.asar` itself, and shows _"Code navigation was
+  re-enabled after the Orca update (vX). Restart Orca to activate it."_ What you see per OS:
+  - **macOS, Linux installs your user can write to (e.g. an extracted AppImage):** the patch is
+    applied right away; restart Orca once. On macOS the app is re-signed as after `install` (unless you chose
+    `--no-resign`).
+  - **Windows:** a running Orca keeps `app.asar` locked, so the patched copy is parked next to
+    it and a small helper swaps it in when you quit Orca. The next start has code navigation.
+  - **Read-only installs** (deb/rpm under `/opt` owned by root, a mounted AppImage): the
+    notification gives the exact command, e.g. `sudo monaco-lsp-orca install --app "/opt/Orca"`.
+  - **A new Orca version without the Monaco anchor:** _"This Orca version (x.y.z) isn't
+    supported by Code Navigation yet"_, and nothing is changed.
+
+  **Language Servers: Repair Orca Patch** runs the same check on demand. Turn the automatic
+  repair off with `install --no-auto-repair` (`~/.monaco-lsp-orca/config.json`).
+
+- **macOS signing:** by default the app is ad-hoc re-signed after patching, which replaces
+  Orca's Developer ID signature. Expect keychain/privacy prompts again. Auto-update may refuse
+  until you reinstall Orca from the official download, which is also the only way to restore the
+  original signature. `install --no-resign` keeps the Developer ID signature instead (see
+  [Testing on macOS](#testing-on-macos)).
 - **Linux AppImage** is read-only: extract it (`--appimage-extract`), patch `squashfs-root`
   with `--app`, and launch via `AppRun`.
 - **Not supported yet:** remote/SSH worktrees. The editor stays read-only for navigation:
@@ -94,6 +113,26 @@ Other commands:
   Monaco behaviour).
 - Set `localStorage['mlp.disabled'] = '1'` in Orca's devtools to turn the injector off, or
   `localStorage['mlp.debug'] = '1'` to turn on logging.
+
+### Testing on macOS
+
+Neither signing mode has been tried on a real Mac yet. If you can, please try `--no-resign`
+first and report back:
+
+```sh
+node packages/orca-patcher/dist/cli.js install --no-resign
+node packages/orca-patcher/dist/cli.js status        # shows the signing mode + codesign --verify
+```
+
+1. Does Orca launch (also after a reboot)? Does Code Navigation work?
+2. When the next Orca update arrives, does the auto-update install? After the restart, does the
+   plugin re-enable code navigation (one more restart)?
+3. Any keychain or privacy prompts?
+
+`--no-resign` keeps Orca's Developer ID signature, so its code identity is unchanged and
+auto-update should keep working, but the resource seal no longer matches the modified `app.asar`
+and macOS may call the app "damaged" in some situations (for example after it is quarantined
+again). To recover, run `install` without the flag (re-signs ad hoc) or reinstall Orca.
 
 ## Security
 
@@ -137,6 +176,7 @@ must use `file://` URIs (`monaco.Uri.file(path)`).
 | `packages/orca-plugin`       | Orca plugin hosting the bridge                                 |
 | `packages/orca-injector`     | Script injected into Orca's renderer                           |
 | `packages/orca-patcher`      | `monaco-lsp-orca` CLI: install/uninstall/status/doctor         |
+| `packages/orca-patch-core`   | Patch logic shared by the CLI and the plugin's self-repair     |
 | `apps/demo`                  | Standalone demo + Playwright e2e for all four languages        |
 | `apps/orca-sim`              | Orca simulation for end-to-end tests of the full chain         |
 | `fixtures/`                  | Tiny multi-file projects per language                          |

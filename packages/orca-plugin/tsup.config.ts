@@ -4,7 +4,9 @@ import { defineConfig } from 'tsup'
 const bridgeSource = fileURLToPath(new URL('../lsp-bridge/src/index.ts', import.meta.url))
 
 export default defineConfig({
-  entry: { main: 'src/main.ts' },
+  // apply-pending: the detached helper that swaps a deferred patch in after Orca quits (Windows).
+  // splitting:false keeps each entry self-contained.
+  entry: { main: 'src/main.ts', 'apply-pending': 'src/apply-pending.ts' },
   format: ['esm'],
   outExtension: () => ({ js: '.mjs' }),
   platform: 'node',
