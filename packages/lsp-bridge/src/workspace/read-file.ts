@@ -23,6 +23,14 @@ export function filePathFromUri(uri: unknown): string {
   if (url.protocol !== 'file:') {
     throw invalidParams(`Only file: URIs are supported: ${uri}`)
   }
+  // Why: on Windows `file://server/share/x` becomes the UNC path
+  // \\server\share\x, and merely touching it (realpath, stat) makes Windows
+  // authenticate to that server over SMB, leaking NTLM credentials. Refuse
+  // remote hosts before any fs call. (WHATWG URL already folds `localhost`
+  // to an empty host.)
+  if (url.host !== '' && url.hostname.toLowerCase() !== 'localhost') {
+    throw invalidParams(`Remote file URIs are not supported: ${uri}`)
+  }
   try {
     return fileURLToPath(url)
   } catch (error) {
