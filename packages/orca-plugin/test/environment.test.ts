@@ -78,7 +78,12 @@ describe('extendedPath', () => {
   })
 
   it('includes the official Go toolchain dir, since gopls needs `go` on PATH', () => {
-    const posix = candidateServerDirs({ platform: 'darwin', homedir: '/Users/me', env: {}, listDir: () => [] })
+    const posix = candidateServerDirs({
+      platform: 'darwin',
+      homedir: '/Users/me',
+      env: {},
+      listDir: () => []
+    })
     expect(posix).toContain('/usr/local/go/bin')
     expect(posix.indexOf('/usr/local/go/bin')).toBeGreaterThan(posix.indexOf('/Users/me/go/bin'))
     const win = candidateServerDirs({
