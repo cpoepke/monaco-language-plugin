@@ -350,7 +350,13 @@ The entry must `export default` the activate function; it may also export `deact
 **Worker environment and userData**, VERIFIED:
 
 - `fork(entryPath, [], { env: buildPluginWorkerEnv(), execArgv: [], serialization:'advanced' })`.
-  No `cwd` is set, so the worker inherits the main-process cwd.
+  No `cwd` is set, so the worker inherits the main-process cwd. No `execPath` is set either, so
+  the worker runs Orca's own executable (`process.execPath` = `Orca.app/Contents/MacOS/<bin>`,
+  `Orca.exe`, `orca-ide`) and `process.ppid` is Orca's main process. The self-repair derives
+  `app.asar` from it (`plugin-host-process.ts` `startPluginWorker`).
+- Manifest-declared events start a stopped worker: `deliverPluginEvent`
+  (`plugin-event-delivery.ts`) calls `workerController.ensure(plugin)` before delivering, which
+  is how the plugin gets started after an update removed the injector.
 - The env allowlist is `PATH, HOME, USERPROFILE, LANG, LC_*, TZ, TMP*, SYSTEMROOT…` plus
   `ELECTRON_RUN_AS_NODE=1`. **`APPDATA`, `XDG_CONFIG_HOME` and `ORCA_USER_DATA_PATH` are stripped.** argv
   is empty.
