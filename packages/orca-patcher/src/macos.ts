@@ -3,13 +3,18 @@ import type { Context } from './context.js'
 import { PatcherError } from './errors.js'
 
 export const GATEKEEPER_NOTE = [
-  'macOS: Orca.app was re-signed ad hoc (its Developer ID signature is replaced). Notes:',
+  'macOS: Orca.app was re-signed ad hoc (`codesign --force --deep --sign -`), replacing its',
+  'Developer ID signature on the app and every nested helper/framework. What that means:',
   '  - If macOS refuses to open it, right-click Orca.app → Open once, or run:',
   '      xattr -dr com.apple.quarantine /Applications/Orca.app',
+  "  - The app's code identity changed (an ad-hoc signature's designated requirement is its cdhash).",
+  "    Keychain items bound to Orca's signature (e.g. secrets stored with Electron safeStorage) may",
+  '    prompt for access again or stop matching, and macOS privacy (TCC) grants such as Files &',
+  '    Folders, Accessibility or Screen Recording may be asked for again.',
   "  - Orca's built-in auto-update may refuse to install updates over an ad-hoc signed app. If an",
   '    update fails, download Orca again from its website, then re-run `monaco-lsp-orca install`.',
-  '  - `uninstall` restores the original app.asar, but only a fresh download restores the original',
-  '    Developer ID signature.'
+  '  - `uninstall` restores the original app.asar but cannot restore the Developer ID signature.',
+  '    To fully revert, reinstall Orca from the official download.'
 ].join('\n')
 
 /** Ad-hoc re-sign the bundle so the modified resources do not break the signature seal. */

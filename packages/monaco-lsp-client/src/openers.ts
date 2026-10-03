@@ -63,6 +63,24 @@ export function resolveEditorOpenTarget(
   return { uri, range: toRange(selectionOrPosition) }
 }
 
+/** Schemes the link opener lets through to Monaco's default opener (opened externally). */
+const EXTERNAL_LINK_SCHEMES = new Set(['http', 'https', 'mailto'])
+
+/**
+ * What the link opener does with a clicked link: route `file:` links to the host,
+ * pass http(s)/mailto through to Monaco, and swallow everything else.
+ * Why: Monaco opens document links with `allowCommands: true`; refusing `command:`,
+ * `javascript:`, `vscode:` and similar here keeps a hostile link from reaching the
+ * command opener even if it slipped past provider-side filtering.
+ */
+export function classifyLink(resource: { scheme: string }): 'host' | 'external' | 'blocked' {
+  const scheme = resource.scheme.toLowerCase()
+  if (scheme === 'file') {
+    return 'host'
+  }
+  return EXTERNAL_LINK_SCHEMES.has(scheme) ? 'external' : 'blocked'
+}
+
 /** Maps a clicked link to a host navigation target; null for non-file links. */
 export function resolveLinkOpenTarget(resource: {
   scheme: string
@@ -81,7 +99,8 @@ type OpenerMonaco = Pick<typeof Monaco, 'Uri'> & {
 export function registerOpeners(
   monaco: OpenerMonaco,
   open: (target: OpenLocationTarget, source: OpenLocationSource) => Promise<boolean>,
-  focusedEditor: () => Monaco.editor.ICodeEditor | null
+  focusedEditor: () => Monaco.editor.ICodeEditor | null,
+  onBlockedLink?: (uri: string) => void
 ): Monaco.IDisposable[] {
   const toFileUri = (path: string): string => monaco.Uri.from({ scheme: 'file', path }).toString()
   return [
@@ -97,9 +116,14 @@ export function registerOpeners(
     }),
     monaco.editor.registerLinkOpener({
       open(resource) {
-        const target = resolveLinkOpenTarget(resource)
+        const kind = classifyLink(resource)
+        if (kind === 'blocked') {
+          onBlockedLink?.(resource.toString())
+          return true
+        }
+        const target = kind === 'host' ? resolveLinkOpenTarget(resource) : null
         if (!target) {
-          // Why: http(s) and friends fall through to Monaco's default opener.
+          // Why: http(s) and mailto fall through to Monaco's default opener.
           return false
         }
         const editor = focusedEditor()

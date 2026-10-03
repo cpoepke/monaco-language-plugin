@@ -15,6 +15,35 @@ const token = {
   isCancellationRequested: false,
   onCancellationRequested: () => ({ dispose() {} })
 }
+/** Minimal CancellationTokenSource that counts live listeners. */
+class TokenSource {
+  private readonly handlers = new Set<() => void>()
+  private cancelled = false
+  readonly token: {
+    readonly isCancellationRequested: boolean
+    onCancellationRequested(listener: () => void): { dispose(): void }
+  }
+  constructor() {
+    const handlers = this.handlers
+    const isCancelled = () => this.cancelled
+    this.token = {
+      get isCancellationRequested() {
+        return isCancelled()
+      },
+      onCancellationRequested(listener) {
+        handlers.add(listener)
+        return { dispose: () => handlers.delete(listener) }
+      }
+    }
+  }
+  get listeners(): number {
+    return this.handlers.size
+  }
+  cancel(): void {
+    this.cancelled = true
+    for (const handler of [...this.handlers]) handler()
+  }
+}
 const lspRange = (line: number, start: number, end: number) => ({
   start: { line, character: start },
   end: { line, character: end }
@@ -362,6 +391,65 @@ describe('providers', () => {
     expect(bridge.messages('document/open')).toHaveLength(2)
   })
 
+  it('sends lsp/cancel for the in-flight request id when Monaco cancels, and answers null', async () => {
+    const lsp = start()
+    const model = await openApp(lsp)
+    let release!: () => void
+    bridge.handlers.set(
+      'lsp/request',
+      () => new Promise<null>((resolve) => (release = () => resolve(null)))
+    )
+    const source = new TokenSource()
+    const pending = monaco.provider('definition', 'typescript').provideDefinition!(
+      model,
+      { lineNumber: 1, column: 1 },
+      source.token
+    )
+    await waitFor(() => bridge.messages('lsp/request').length === 1)
+    source.cancel()
+    expect(await pending).toBeNull()
+    await waitFor(() => bridge.messages('lsp/cancel').length === 1)
+    const requestId = bridge.messages('lsp/request')[0]!.id
+    expect(requestId).toBeDefined()
+    expect(bridge.messages('lsp/cancel')[0]).toMatchObject({ params: { id: requestId } })
+    expect(bridge.messages('lsp/cancel')[0]!.id).toBeUndefined() // a notification
+    // the cancellation listener was released once the request settled
+    expect(source.listeners).toBe(0)
+    // a late answer for the cancelled id is ignored
+    release()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    // an already-cancelled token sends nothing at all
+    const before = bridge.messages('lsp/request').length
+    const done = new TokenSource()
+    done.cancel()
+    expect(
+      await monaco.provider('hover', 'typescript').provideHover!(
+        model,
+        { lineNumber: 1, column: 1 },
+        done.token
+      )
+    ).toBeNull()
+    expect(bridge.messages('lsp/request')).toHaveLength(before)
+    expect(bridge.messages('lsp/cancel')).toHaveLength(1)
+  })
+
+  it('releases cancellation listeners of requests that complete normally', async () => {
+    const lsp = start()
+    const model = await openApp(lsp)
+    bridge.handlers.set('lsp/request', () => ({ contents: 'doc' }))
+    const source = new TokenSource()
+    await monaco.provider('hover', 'typescript').provideHover!(
+      model,
+      { lineNumber: 1, column: 1 },
+      source.token
+    )
+    expect(source.listeners).toBe(0)
+    source.cancel()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(bridge.messages('lsp/cancel')).toHaveLength(0)
+  })
+
   it('answers null quickly for models without a session', async () => {
     const lsp = start({ languages: ['typescript', 'python'] })
     await lsp.ready
@@ -407,6 +495,37 @@ describe('providers', () => {
       method: 'documentLink/resolve',
       params: { data: { id: 7 } }
     })
+  })
+
+  it('never hands Monaco a command: (or other unsafe) link target', async () => {
+    const lsp = start()
+    const model = await openApp(lsp)
+    bridge.handlers.set('lsp/request', (params) => {
+      const { method, params: inner } = params as {
+        method: string
+        params: Record<string, unknown>
+      }
+      if (method === 'textDocument/documentLink') {
+        return [
+          { range: lspRange(0, 0, 3), target: 'command:workbench.action.terminal.sendSequence' },
+          { range: lspRange(0, 4, 6), target: 'https://example.com' },
+          { range: lspRange(0, 7, 9), data: { id: 1 } }
+        ]
+      }
+      if (method === 'documentLink/resolve') {
+        return { ...inner, target: 'command:editor.action.x' }
+      }
+      return null
+    })
+    const provider = monaco.provider('links', 'typescript')
+    const { links } = (await provider.provideLinks!(model, token)) as {
+      links: { url?: string; range: unknown }[]
+    }
+    expect(links.map((link) => link.url)).toEqual(['https://example.com', undefined])
+    expect(await provider.resolveLink!(links[1], token)).toBeNull()
+    expect(
+      await provider.resolveLink!({ range: links[0]!.range, url: 'javascript:alert(1)' }, token)
+    ).toBeNull()
   })
 
   it('sets markers from pushed diagnostics only when enabled', async () => {

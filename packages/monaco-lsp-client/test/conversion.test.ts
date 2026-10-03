@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 import {
   fileUriKey,
   fileUriToPath,
+  isSafeLinkTarget,
   isSameFileUri,
   lspDiagnosticsToMonacoMarkers,
+  lspDocumentLinkToMonaco,
   lspDocumentLinksToMonaco,
   lspDocumentSymbolsToMonaco,
   lspHoverToMonaco,
@@ -191,6 +193,31 @@ describe('lspDocumentLinksToMonaco', () => {
     })
     expect(links[1]?.url).toBeUndefined()
     expect(links[1]?.lspLink).toBe(raw)
+  })
+
+  it('drops links whose target is not file:, http: or https:', () => {
+    const unsafe = [
+      'command:workbench.action.terminal.new',
+      'COMMAND:editor.action.x',
+      'javascript:alert(1)',
+      'vscode://file/etc/passwd',
+      'data:text/html,<script>1</script>',
+      ' command:x',
+      'relative/path.ts',
+      ''
+    ]
+    const links = lspDocumentLinksToMonaco([
+      ...unsafe.map((target) => ({ range: lspRange, target })),
+      { range: lspRange, target: 'FILE:///repo/a.ts' },
+      { range: lspRange, target: 'http://example.com' }
+    ])
+    expect(links.map((link) => link.url)).toEqual(['FILE:///repo/a.ts', 'http://example.com'])
+    for (const target of unsafe) {
+      expect(isSafeLinkTarget(target)).toBe(false)
+      // resolve results go through the single-link mapper: no url means "not resolved"
+      expect(lspDocumentLinkToMonaco({ range: lspRange, target }).url).toBeUndefined()
+    }
+    expect(isSafeLinkTarget('https://x')).toBe(true)
   })
 })
 

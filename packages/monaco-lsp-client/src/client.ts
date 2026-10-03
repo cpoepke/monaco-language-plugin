@@ -314,7 +314,14 @@ export function createMonacoLspClient(
     detach: (key) => documents.detach(key)
   })
 
-  disposables.push(...registerOpeners(monaco, openLocation, () => tracker.focusedEditor))
+  disposables.push(
+    ...registerOpeners(
+      monaco,
+      openLocation,
+      () => tracker.focusedEditor,
+      (uri) => logger.warn?.(`[mlp] refused to open link with an unsafe scheme: ${uri}`)
+    )
+  )
 
   // --- connection wiring -------------------------------------------------------
   connection.onConnect((hello) => {

@@ -1,5 +1,5 @@
 import path from 'node:path'
-import type { Context } from './context.js'
+import { type Context, chownToInvokingUser } from './context.js'
 import { readJson, writeJsonAtomic } from './fsutil.js'
 
 export type PatchRecord = {
@@ -25,6 +25,7 @@ export function recordPatch(ctx: Context, asarPath: string, record: PatchRecord)
   const state = readState(ctx)
   state.installs[asarPath] = record
   writeJsonAtomic(statePath(ctx), state)
+  chownToInvokingUser(ctx, statePath(ctx))
 }
 
 export function forgetPatch(ctx: Context, asarPath: string): void {
@@ -32,4 +33,5 @@ export function forgetPatch(ctx: Context, asarPath: string): void {
   if (!(asarPath in state.installs)) return
   delete state.installs[asarPath]
   writeJsonAtomic(statePath(ctx), state)
+  chownToInvokingUser(ctx, statePath(ctx))
 }

@@ -42,6 +42,7 @@ export type ReadFile = (
  */
 export class LocationModels<U extends UriLike> {
   private readonly peekModels: { key: string; model: PeekModel }[] = []
+  private disposed = false
 
   constructor(
     private readonly monaco: LocationModelMonaco<U>,
@@ -55,6 +56,9 @@ export class LocationModels<U extends UriLike> {
 
   /** Like resolve(), but aligned with the input: null where a location cannot be shown. */
   async resolveEach(locations: LspLocation[]): Promise<({ uri: U; range: IRange } | null)[]> {
+    if (this.disposed) {
+      return locations.map(() => null)
+    }
     const byFile = new Map<string, Promise<U | null>>()
     const pending: ({ fileKey: string; location: LspLocation } | null)[] = []
     // Why: start every read before awaiting any, so N files cost one round of latency.
@@ -78,6 +82,11 @@ export class LocationModels<U extends UriLike> {
     }
     const resolved: ({ uri: U; range: IRange } | null)[] = []
     const keep = new Set<string>()
+    await Promise.allSettled(byFile.values())
+    if (this.disposed) {
+      // Why: the client went away while files were being read; its peek models are gone.
+      return locations.map(() => null)
+    }
     for (const item of pending) {
       const uri = item ? await byFile.get(item.fileKey) : null
       if (item && uri) {
@@ -93,6 +102,7 @@ export class LocationModels<U extends UriLike> {
 
   /** Disposes every peek model this instance created. */
   dispose(): void {
+    this.disposed = true
     for (const { model } of this.peekModels.splice(0)) {
       if (!model.isDisposed?.()) {
         model.dispose()
@@ -115,6 +125,10 @@ export class LocationModels<U extends UriLike> {
       return peekUri
     }
     const file = await this.readFile(rawUri).catch(() => null)
+    if (this.disposed) {
+      // Why: a read that resolves after dispose() must not create (or refresh) models.
+      return null
+    }
     const current = this.monaco.editor.getModel(peekUri)
     if (current) {
       // Why: a detached peek model may be stale; an attached one is left alone mid-peek.

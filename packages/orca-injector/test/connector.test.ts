@@ -20,13 +20,15 @@ const ok = (port = 4000, token = 'tok') => ({
 
 function setup(invoke: InvokeCommand | null) {
   let visible = true
+  let connected = false
   const holder = { invoke }
   const connector = new BridgeConnector({
     getInvoke: () => holder.invoke,
     now: () => Date.now(),
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-    isVisible: () => visible
+    isVisible: () => visible,
+    isClientConnected: () => connected
   })
   return {
     connector,
@@ -34,6 +36,9 @@ function setup(invoke: InvokeCommand | null) {
     setVisible(v: boolean) {
       visible = v
       connector.handleVisibilityChange()
+    },
+    setConnected(c: boolean) {
+      connected = c
     }
   }
 }
@@ -163,6 +168,30 @@ describe('BridgeConnector', () => {
     expect(invoke).toHaveBeenCalledTimes(4)
     await vi.advanceTimersByTimeAsync(120_000)
     expect(invoke).toHaveBeenCalledTimes(5)
+  })
+
+  it('keeps heartbeating while hidden as long as the client is connected', async () => {
+    const invoke = vi.fn(async () => ok())
+    const { connector, setVisible, setConnected } = setup(invoke)
+    await connector.refresh()
+    connector.startHeartbeat()
+    setConnected(true)
+    setVisible(false)
+    // minimized for 10 min: Orca's 5-min idle reap must never see a gap > 2 min
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(invoke).toHaveBeenCalledTimes(1 + 5)
+
+    // hidden and disconnected: paused
+    setConnected(false)
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(invoke).toHaveBeenCalledTimes(6)
+
+    // the client reconnects while still hidden: heartbeats resume within one period
+    setConnected(true)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(invoke).toHaveBeenCalledTimes(7)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(invoke).toHaveBeenCalledTimes(8)
   })
 
   it('a failed heartbeat switches to retrying', async () => {
