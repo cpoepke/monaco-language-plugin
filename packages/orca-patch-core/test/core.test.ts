@@ -20,11 +20,14 @@ import {
   makeTempDir,
   pendingPaths,
   readAppPackage,
+  readAsarFile,
+  readEntries,
   readPending,
   readUserConfig,
   removeDir,
   sha256File,
   silentLogger,
+  toAsarLookupPath,
   writePending,
   writeUserConfig
 } from '../src/index'
@@ -109,6 +112,21 @@ describe('archive helpers', () => {
     const other = await fake({ name: 'electron-default-app', anchor: false })
     expect(readAppPackage(other.asarPath).name).toBe('electron-default-app')
     expect(findAnchorFilesInArchive(other.asarPath)).toEqual([])
+  })
+
+  // Regression (Windows): @electron/asar splits lookups on the host separator, so posix archive
+  // paths found nothing there and every rebuilt archive looked "missing the injection".
+  it('looks archive paths up with the host separator but reports them as posix', async () => {
+    expect(toAsarLookupPath('out/renderer/index.html', '\\')).toBe('out\\renderer\\index.html')
+    expect(toAsarLookupPath('out/renderer/index.html', '/')).toBe('out/renderer/index.html')
+    expect(toAsarLookupPath('package.json', '\\')).toBe('package.json')
+    const f = await fake()
+    expect(readAsarFile(f.asarPath, 'out/renderer/assets/index-abc.css')?.toString()).toBe(
+      'body{margin:0}\n'
+    )
+    expect(readAsarFile(f.asarPath, 'out/renderer/missing.js')).toBeNull()
+    expect([...readEntries(f.asarPath).keys()]).toContain('out/renderer/assets/MonacoEditor-def.js')
+    expect([...readEntries(f.asarPath).keys()].some((k) => k.includes('\\'))).toBe(false)
   })
 
   it('compares versions numerically', () => {

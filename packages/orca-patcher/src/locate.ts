@@ -77,8 +77,12 @@ function isFile(p: string): boolean {
   }
 }
 
+// Why the native `path` below: these paths name real files on this machine (an `--app` argument
+// or an existing app.asar), so they must be parsed the way the host's filesystem does even when
+// `platform` is overridden (tests simulate Linux/macOS layouts on any host). `pathFor(platform)`
+// is only for the pure, per-OS default locations above.
 function targetFromAsar(platform: NodeJS.Platform, asarPath: string): OrcaTarget {
-  const p = pathFor(platform)
+  const p = path
   const resourcesDir = p.dirname(asarPath)
   const parent = p.dirname(resourcesDir)
   if (p.basename(resourcesDir) === 'Resources' && p.basename(parent) === 'Contents') {
@@ -96,7 +100,7 @@ function targetFromAsar(platform: NodeJS.Platform, asarPath: string): OrcaTarget
 
 /** Resolve the Orca installation to operate on (explicit `--app` or the per-OS defaults). */
 export function resolveTarget(ctx: Context, app?: string): OrcaTarget {
-  const p = pathFor(ctx.platform)
+  const p = path
   if (app) {
     const abs = p.resolve(app)
     if (/\.appimage$/i.test(abs)) {

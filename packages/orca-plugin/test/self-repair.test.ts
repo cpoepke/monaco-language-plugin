@@ -69,6 +69,24 @@ describe('orcaInstallFromExecPath', () => {
     })
     expect(orcaInstallFromExecPath('orca-ide', 'linux')).toBeNull()
   })
+
+  it('parses execPath by its shape, so a simulated layout works on any host', () => {
+    // A Windows host path with the macOS bundle layout (tests simulate macOS on Windows).
+    expect(orcaInstallFromExecPath('D:\\t\\Orca.app\\Contents\\MacOS\\Orca', 'darwin')).toEqual({
+      asarPath: 'D:\\t\\Orca.app\\Contents\\Resources\\app.asar',
+      resourcesDir: 'D:\\t\\Orca.app\\Contents\\Resources',
+      appRoot: 'D:\\t\\Orca.app',
+      appBundle: 'D:\\t\\Orca.app',
+      appImage: false
+    })
+    expect(orcaInstallFromExecPath('D:\\t\\.mount_OrcaX1\\orca-ide', 'linux')).toMatchObject({
+      asarPath: 'D:\\t\\.mount_OrcaX1\\resources\\app.asar',
+      appImage: true
+    })
+    expect(orcaInstallFromExecPath('\\\\srv\\share\\Orca\\Orca.exe', 'win32')?.appRoot).toBe(
+      '\\\\srv\\share\\Orca'
+    )
+  })
 })
 
 describe('decideRepair', () => {

@@ -63,11 +63,20 @@ export function readEntries(asarPath: string): Map<string, AsarEntry> {
   return out
 }
 
+/**
+ * An archive-internal posix path in the form @electron/asar's lookups expect: they split on the
+ * host's `path.sep`, so on Windows `out/renderer/index.html` must be passed as
+ * `out\renderer\index.html` (the header itself is separator-free: one node per segment).
+ */
+export function toAsarLookupPath(relPosix: string, sep: string = path.sep): string {
+  return relPosix.split('/').join(sep)
+}
+
 /** Read one file from the archive (packed or unpacked); null when missing or not a file. */
 export function readAsarFile(asarPath: string, rel: string): Buffer | null {
   uncache(asarPath)
   try {
-    return asar.extractFile(asarPath, rel)
+    return asar.extractFile(asarPath, toAsarLookupPath(rel))
   } catch {
     return null
   }
@@ -102,7 +111,7 @@ export async function packDirectory(
     for (const entry of entries) {
       const abs = path.join(absDir, entry.name)
       const rel = relDir ? `${relDir}/${entry.name}` : entry.name
-      const archivePath = rel.split('/').join(path.sep)
+      const archivePath = toAsarLookupPath(rel)
       if (entry.isSymbolicLink()) {
         const stat = fs.lstatSync(abs)
         streams.push({

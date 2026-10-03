@@ -25,11 +25,16 @@ export type OrcaInstall = {
 /** Env var standing in for `process.execPath` (tests and the Orca simulation; Orca strips it). */
 export const EXEC_PATH_OVERRIDE_ENV = 'MLP_ORCA_EXEC_PATH'
 
+/** `C:\…`, `C:/…` or a UNC `\\server\share…` path. */
+const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|\\\\)/
+
 export function orcaInstallFromExecPath(
   execPath: string,
   platform: NodeJS.Platform
 ): OrcaInstall | null {
-  const p = platform === 'win32' ? path.win32 : path.posix
+  // Why the path's shape and not `platform`: execPath is a real path on this host, while
+  // `platform` decides only the layout (macOS bundle, AppImage mount), which tests vary freely.
+  const p = WINDOWS_ABSOLUTE.test(execPath) ? path.win32 : path.posix
   if (!execPath || !p.isAbsolute(execPath)) return null
   const binDir = p.dirname(execPath)
   if (platform === 'darwin') {
@@ -57,6 +62,6 @@ export function orcaInstallFromExecPath(
     resourcesDir,
     appRoot: binDir,
     appBundle: null,
-    appImage: platform === 'linux' && /(^|\/)\.mount_[^/]+(\/|$)/.test(binDir)
+    appImage: platform === 'linux' && /(^|[\\/])\.mount_[^\\/]+([\\/]|$)/.test(binDir)
   }
 }

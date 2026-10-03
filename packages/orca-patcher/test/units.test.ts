@@ -80,6 +80,35 @@ describe('locate', () => {
       fs.rmSync(tmp, { recursive: true, force: true })
     }
   })
+
+  // Regression (Windows): `--app C:\…\Orca` was resolved with the simulated platform's path
+  // flavour and joined onto the cwd (`/a/…/C:\…\Orca/resources/app.asar`).
+  it('resolves an absolute --app with host path semantics, whatever the platform', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mlp-locate-'))
+    try {
+      const dir = path.join(tmp, 'Orca')
+      fs.mkdirSync(path.join(dir, 'resources'), { recursive: true })
+      fs.writeFileSync(path.join(dir, 'resources', 'app.asar'), 'x')
+      for (const platform of ['linux', 'darwin', 'win32'] as const) {
+        const ctx = createContext({ platform, logger: silentLogger, homeDir: tmp })
+        expect(resolveTarget(ctx, dir)).toMatchObject({
+          asarPath: path.join(dir, 'resources', 'app.asar'),
+          appRoot: dir
+        })
+        // a path to app.asar itself, and one relative to the cwd
+        expect(resolveTarget(ctx, path.join(dir, 'resources', 'app.asar')).appRoot).toBe(dir)
+        expect(resolveTarget(ctx, path.relative(process.cwd(), dir)).appRoot).toBe(dir)
+      }
+      if (process.platform === 'win32') {
+        // forward slashes and a lower-case drive letter are the same place on Windows
+        const forward = dir.replace(/\\/g, '/').replace(/^[A-Z]:/, (d) => d.toLowerCase())
+        const ctx = createContext({ platform: 'win32', logger: silentLogger, homeDir: tmp })
+        expect(resolveTarget(ctx, forward).kind).toBe('windows')
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('doctor', () => {
