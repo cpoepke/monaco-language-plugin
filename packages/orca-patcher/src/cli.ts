@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { PATCHER_VERSION } from './constants.js'
 import { consoleLogger } from './context.js'
 import { doctor, formatDoctor } from './doctor.js'
 import { ExitCode, PatcherError } from '@mlp/orca-patch-core'
-import { install } from './install.js'
+import { install, type InstallOptions } from './install.js'
 import { formatStatus, status } from './status.js'
 import { uninstall } from './uninstall.js'
 
@@ -33,7 +35,11 @@ Options:
 
 Exit codes: 0 ok, 1 error, 2 not patched / needs action.`
 
-export async function main(argv: string[]): Promise<number> {
+/**
+ * Run the CLI. `defaults` are merged into every command's options (tests inject a logger,
+ * paths and a command runner this way).
+ */
+export async function main(argv: string[], defaults: InstallOptions = {}): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -60,10 +66,11 @@ export async function main(argv: string[]): Promise<number> {
     console.log(USAGE)
     return values.help ? ExitCode.Ok : ExitCode.Error
   }
-  const app = values.app
+  const app = values.app ?? defaults.app
   switch (command) {
     case 'install':
       await install({
+        ...defaults,
         app,
         dryRun: values['dry-run'],
         force: values.force,
@@ -74,10 +81,10 @@ export async function main(argv: string[]): Promise<number> {
       })
       return ExitCode.Ok
     case 'uninstall':
-      await uninstall({ app, force: values.force, purge: values.purge })
+      await uninstall({ ...defaults, app, force: values.force, purge: values.purge })
       return ExitCode.Ok
     case 'status': {
-      const report = await status({ app })
+      const report = await status({ ...defaults, app })
       console.log(values.json ? JSON.stringify(report, null, 2) : formatStatus(report))
       return report.exitCode
     }
@@ -92,20 +99,32 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
-main(process.argv.slice(2)).then(
-  (code) => {
-    process.exitCode = code
-  },
-  (error: unknown) => {
-    if (error instanceof PatcherError) {
-      consoleLogger.error(error.message)
-      process.exitCode = error.exitCode
-    } else if (String((error as { code?: unknown }).code).startsWith('ERR_PARSE_ARGS')) {
-      consoleLogger.error(`${(error as Error).message}\n\n${USAGE}`)
-      process.exitCode = ExitCode.Error
-    } else {
-      consoleLogger.error(error instanceof Error ? (error.stack ?? error.message) : String(error))
-      process.exitCode = ExitCode.Error
-    }
+function isEntryPoint(): boolean {
+  try {
+    return realpathSync(process.argv[1] ?? '') === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return false
   }
-)
+}
+
+if (isEntryPoint()) void run()
+
+function run(): Promise<void> {
+  return main(process.argv.slice(2)).then(
+    (code) => {
+      process.exitCode = code
+    },
+    (error: unknown) => {
+      if (error instanceof PatcherError) {
+        consoleLogger.error(error.message)
+        process.exitCode = error.exitCode
+      } else if (String((error as { code?: unknown }).code).startsWith('ERR_PARSE_ARGS')) {
+        consoleLogger.error(`${(error as Error).message}\n\n${USAGE}`)
+        process.exitCode = ExitCode.Error
+      } else {
+        consoleLogger.error(error instanceof Error ? (error.stack ?? error.message) : String(error))
+        process.exitCode = ExitCode.Error
+      }
+    }
+  )
+}

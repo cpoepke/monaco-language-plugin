@@ -42,16 +42,19 @@ describe('orca-plugin.json', () => {
     )
   })
 
-  it('asks only for notifications and worktree events', () => {
+  it('asks only for notifications and events', () => {
     const manifest = pluginManifestSchema.parse(manifestRaw)
     expect(manifest.capabilities).toEqual([
       { kind: 'notifications:show' },
       { kind: 'events:subscribe' }
     ])
-    // Why: worktree.removed must revoke the bridge's access to that tree.
+    // Why: worktree.removed must revoke the bridge's access to that tree;
+    // agent.status.changed makes Orca start the worker soon after launch, so the
+    // self-repair runs even when an update removed the injector.
     expect(manifest.contributes.events).toEqual([
       { on: 'worktree.created' },
-      { on: 'worktree.removed' }
+      { on: 'worktree.removed' },
+      { on: 'agent.status.changed' }
     ])
   })
 

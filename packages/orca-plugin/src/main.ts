@@ -17,6 +17,7 @@ import { createOrcaRuntimeClient } from './orca-runtime-client'
 import { userDataCandidates } from './orca-user-data'
 import { createPluginController } from './plugin-controller'
 import type { PluginController } from './plugin-controller'
+import { createSelfRepair } from './self-repair/self-repair'
 import { applyExtendedPath } from './server-path'
 import { PLUGIN_VERSION } from './version'
 import { createWorktreeRoots } from './worktree-roots'
@@ -53,6 +54,15 @@ function createController(): PluginController {
     hostNavigationAvailable: () => runtime.metadataPath() !== null,
     pluginVersion: PLUGIN_VERSION,
     detectServers,
+    selfRepair: createSelfRepair({
+      execPath: process.execPath,
+      platform: process.platform,
+      env: process.env,
+      homedir: homedir(),
+      pluginRoot,
+      parentPid: process.ppid,
+      pluginVersion: PLUGIN_VERSION
+    }),
     prepareEnvironment: (log) => {
       const added = applyExtendedPath()
       if (added.length > 0) {

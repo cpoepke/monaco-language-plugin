@@ -13,9 +13,11 @@
   },
   "dependencies": {
     "@mlp/lsp-bridge": "workspace:*",
+    "@mlp/orca-patch-core": "workspace:*",
     "@mlp/protocol": "workspace:*"
   },
   "devDependencies": {
+    "@mlp/orca-injector": "workspace:*",
     "typescript": "~5.9.3",
     "zod": "~4.6.5"
   }

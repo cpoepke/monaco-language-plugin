@@ -14,9 +14,14 @@
       { "id": "mlp.ensureBridge", "title": "Language Servers: Start / Get Connection" },
       { "id": "mlp.status", "title": "Language Servers: Status" },
       { "id": "mlp.restart", "title": "Language Servers: Restart" },
-      { "id": "mlp.stop", "title": "Language Servers: Stop" }
+      { "id": "mlp.stop", "title": "Language Servers: Stop" },
+      { "id": "mlp.repairPatch", "title": "Language Servers: Repair Orca Patch" }
     ],
-    "events": [{ "on": "worktree.created" }, { "on": "worktree.removed" }]
+    "events": [
+      { "on": "worktree.created" },
+      { "on": "worktree.removed" },
+      { "on": "agent.status.changed" }
+    ]
   },
   "capabilities": [{ "kind": "notifications:show" }, { "kind": "events:subscribe" }]
 }
