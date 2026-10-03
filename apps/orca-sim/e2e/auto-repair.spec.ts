@@ -57,6 +57,12 @@ test.describe('auto-repair after an Orca update', () => {
     fs.writeFileSync(path.join(install, 'orca-ide'), '#!/bin/sh\n')
     asarPath = path.join(install, 'resources', 'app.asar')
     expect(readPatch(asarPath).blocks).toBe(1)
+    // The config `monaco-lsp-orca install` writes; without it the plugin never patches on its own.
+    fs.mkdirSync(path.join(root, 'home'), { recursive: true })
+    fs.writeFileSync(
+      path.join(root, 'home', 'config.json'),
+      JSON.stringify({ autoRepair: true, resign: true })
+    )
     // Orca auto-update: a fresh, unpatched 1.4.215 app.asar.
     fs.copyFileSync(UPDATE_ASAR, asarPath)
     expect(readPatch(asarPath)).toEqual({ blocks: 0, version: null })

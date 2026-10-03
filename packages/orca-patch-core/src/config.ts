@@ -25,13 +25,21 @@ export function patcherHome(
 
 export const configPath = (stateDir: string): string => path.join(stateDir, CONFIG_FILENAME)
 
-/** Missing or unreadable file → defaults; unknown/invalid fields fall back field by field. */
+/**
+ * Unknown/invalid fields fall back to the defaults field by field. A missing or unreadable file
+ * disables auto-repair: the plugin may only restore a patch the user installed with the CLI
+ * (which writes this file), never patch an Orca install on its own initiative.
+ */
 export function readUserConfig(stateDir: string): UserConfig & { exists: boolean } {
   const raw = readJson<Record<string, unknown>>(configPath(stateDir))
   const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null
   const bool = (key: keyof UserConfig): boolean =>
     typeof record?.[key] === 'boolean' ? (record[key] as boolean) : DEFAULT_CONFIG[key]
-  return { autoRepair: bool('autoRepair'), resign: bool('resign'), exists: record !== null }
+  return {
+    autoRepair: record === null ? false : bool('autoRepair'),
+    resign: bool('resign'),
+    exists: record !== null
+  }
 }
 
 /** Merge `changes` into the file (other keys are kept) and return the effective config. */

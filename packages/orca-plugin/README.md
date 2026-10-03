@@ -101,7 +101,9 @@ patch with the same code as the CLI (`@mlp/orca-patch-core`, bundled into `dist/
   exits. One helper per install; it never leaves a half-written `app.asar`. Log:
   `~/.monaco-lsp-orca/logs/apply-pending.log`.
 - **Settings:** `~/.monaco-lsp-orca/config.json` (`{ "autoRepair": true, "resign": true }`,
-  written by `monaco-lsp-orca install`; a missing file means both `true`). `uninstall` sets
+  written by `monaco-lsp-orca install`). A missing file means `autoRepair: false`: the plugin only
+  restores a patch you installed with the CLI and never patches Orca on its own. The repair command
+  still works, since running it is an explicit request. `uninstall` sets
   `autoRepair` to `false`. The last outcome is kept in `~/.monaco-lsp-orca/self-repair.json` and
   shown by `mlp.status`.
 - **Concurrency:** an exclusive lock file next to `app.asar` (`app.asar.mlp-lock`, shared with the

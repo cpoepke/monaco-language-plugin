@@ -80,9 +80,10 @@ describe('patch lock', () => {
 describe('user config', () => {
   it('defaults when missing or invalid, merges writes, keeps unknown keys', () => {
     const dir = tmp()
-    expect(readUserConfig(dir)).toEqual({ ...DEFAULT_CONFIG, exists: false })
+    // No file (CLI never ran) → auto-repair stays off; the plugin must not patch on its own.
+    expect(readUserConfig(dir)).toEqual({ ...DEFAULT_CONFIG, autoRepair: false, exists: false })
     fs.writeFileSync(configPath(dir), '{ not json')
-    expect(readUserConfig(dir)).toEqual({ autoRepair: true, resign: true, exists: false })
+    expect(readUserConfig(dir)).toEqual({ autoRepair: false, resign: true, exists: false })
     fs.writeFileSync(configPath(dir), JSON.stringify({ resign: 'no', note: 'mine' }))
     expect(readUserConfig(dir)).toEqual({ autoRepair: true, resign: true, exists: true })
     expect(writeUserConfig(dir, { resign: false })).toEqual({ autoRepair: true, resign: false })

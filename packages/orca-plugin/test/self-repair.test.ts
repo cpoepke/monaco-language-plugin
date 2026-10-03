@@ -224,6 +224,8 @@ async function harness(
 ): Promise<Harness> {
   const f = await makeFakeOrca(opts)
   fakes.push(f)
+  // Why: auto-repair only acts on installs the CLI set up, and the CLI writes this file.
+  writeUserConfig(f.stateDir, { autoRepair: true })
   const pluginRoot = path.join(f.root, 'userData', 'plugins', 'cpoepke.monaco-lsp', 'abc')
   fs.mkdirSync(path.join(pluginRoot, 'assets'), { recursive: true })
   fs.copyFileSync(f.injectorPath, path.join(pluginRoot, 'assets', 'injector.js'))
@@ -354,6 +356,18 @@ describe('self-repair on a fake Orca install', () => {
       'app.asar',
       'app.asar.unpacked'
     ])
+  })
+
+  it('never patches on its own when the CLI was never run (no config file)', async () => {
+    const h = await harness()
+    fs.rmSync(configPath(h.stateDir))
+    const repair = start(h)
+    await repair.check({ forced: false, trigger: 'activate' })
+    expect(inspectAsar(h.f.asarPath).injectedBlocks).toBe(0)
+    expect(h.notes).toEqual([])
+    // The explicit repair command is the user asking, so it still works.
+    await repair.check({ forced: true, trigger: 'command' })
+    expect(inspectAsar(h.f.asarPath).injectedBlocks).toBe(1)
   })
 
   it('does nothing automatically when autoRepair is off, but the command still repairs', async () => {

@@ -30,7 +30,8 @@ one. See [`packages/orca-plugin/README.md`](../orca-plugin/README.md#self-repair
 
 `~/.monaco-lsp-orca/config.json` holds the settings both sides use; `install` writes it from its
 flags (a plain `install` resets both to `true`), `uninstall` sets `autoRepair` to `false` so the
-plugin does not patch Orca again:
+plugin does not patch Orca again. Without this file auto-repair is off, so the plugin never patches
+an Orca you didn't patch with the CLI:
 
 ```json
 { "autoRepair": true, "resign": true }

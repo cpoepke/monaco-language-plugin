@@ -103,7 +103,8 @@ Orca update → new app.asar (no injector) → Orca starts → agent.status.chan
   detached helper (Orca's binary in Node mode, `dist/apply-pending.mjs`) swaps it in after Orca's
   main process exits, after checking that `app.asar` is still the one it was built from.
 - **Opt-out and signing.** `~/.monaco-lsp-orca/config.json` (`autoRepair`, `resign`) is written by
-  the CLI; `uninstall` turns `autoRepair` off. On macOS the repair re-signs ad hoc unless
+  the CLI; `uninstall` turns `autoRepair` off, and without the file it is off. The plugin only
+  restores patches the user installed. On macOS the repair re-signs ad hoc unless
   `resign` is false (`install --no-resign`).
 - **Pure decisions.** What to do for which archive state, and the text of every notification, is
   a pure function (`packages/orca-plugin/src/self-repair/decide.ts`); the e2e suite simulates an
