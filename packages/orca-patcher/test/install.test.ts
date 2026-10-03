@@ -9,7 +9,8 @@ import {
   readBackupMeta,
   readEntries,
   readUserConfig,
-  sha256File
+  sha256File,
+  toAsarLookupPath
 } from '@mlp/orca-patch-core'
 import {
   BACKUP_SUFFIX,
@@ -53,7 +54,10 @@ function expectUnpackedIntact(f: FakeOrca): void {
   const onDisk = path.join(`${f.asarPath}.unpacked`, 'node_modules', 'x', 'x.node')
   expect(fs.readFileSync(onDisk)).toEqual(NATIVE_BYTES)
   asar.uncacheAll()
-  expect(asar.extractFile(f.asarPath, 'node_modules/x/x.node')).toEqual(NATIVE_BYTES)
+  // @electron/asar looks paths up with the host separator (see toAsarLookupPath).
+  expect(asar.extractFile(f.asarPath, toAsarLookupPath('node_modules/x/x.node'))).toEqual(
+    NATIVE_BYTES
+  )
   // nothing besides the original unpacked files ended up in app.asar.unpacked
   expect(fs.readdirSync(`${f.asarPath}.unpacked`, { recursive: true }).sort()).toEqual([
     'node_modules',
