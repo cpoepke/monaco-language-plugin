@@ -107,6 +107,11 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
   const target = resolveTarget(ctx, options.app)
   const injector = loadInjector(options.injectorPath)
   logger.info(`Orca: ${target.asarPath}`)
+  if (ctx.invokingUser) {
+    logger.info(
+      `Running under sudo: state and plugin folder go to ${ctx.stateDir} (owned by ${ctx.invokingUser.name})`
+    )
+  }
 
   await assertNotRunning(ctx, target, options.force)
   if (dryRun) {

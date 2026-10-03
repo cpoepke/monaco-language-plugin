@@ -1,6 +1,7 @@
 // Adapted from stablyai/orca PR #14873 (MIT). See vendor/orca-lsp.
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { isAbsolute } from 'node:path'
 import type { ResolvedLspServer } from './server-catalog'
 
 export type SpawnedServer = {
@@ -37,6 +38,11 @@ export function windowsSpawnArgs(
 
 export const spawnLspServer: SpawnLspServer = (server, rootPath) => {
   const isWindows = process.platform === 'win32'
+  // Why: a relative command would be looked up against cwd (the project being
+  // opened) by the OS; the resolver only ever produces absolute paths.
+  if (!isAbsolute(server.executablePath)) {
+    throw new Error(`refusing to spawn a relative command: ${server.executablePath}`)
+  }
   const target = isWindows
     ? windowsSpawnArgs(server.executablePath, server.args)
     : { command: server.executablePath, args: [...server.args], verbatim: false }

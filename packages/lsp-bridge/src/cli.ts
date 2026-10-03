@@ -10,7 +10,8 @@ const USAGE = `Usage: mlp-bridge [options]
 
   --port <n>        Port to listen on (default ${DEFAULT_BRIDGE_PORT}; 0 = ephemeral)
   --token <t>       Shared secret (default: $MLP_BRIDGE_TOKEN, else a random token)
-  --root <dir>      Allowed root; repeatable. Without it any local file may be served.
+  --root <dir>      Allowed root; repeatable. Without it, documents may be opened
+                    anywhere and reads stay inside the opened sessions' roots.
   --host <addr>     Interface to bind (default 127.0.0.1)
   --allow-remote    Permit a non-loopback --host
   --trust-project-binaries

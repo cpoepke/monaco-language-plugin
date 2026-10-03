@@ -194,4 +194,27 @@ describe('LocationModels', () => {
     models.dispose()
     expect(monaco.models.size).toBe(0)
   })
+
+  it('creates no peek models for reads that finish after dispose()', async () => {
+    const monaco = fakeMonaco()
+    let finish!: () => void
+    const readFile = vi.fn(
+      () =>
+        new Promise<{ text: string; languageId: string }>(
+          (resolve) => (finish = () => resolve({ text: 'late', languageId: 'typescript' }))
+        )
+    )
+    const models = new LocationModels(monaco, readFile)
+    const result = models.resolveEach([{ uri: 'file:///d/late.ts', range }])
+    await vi.waitFor(() => expect(readFile).toHaveBeenCalled())
+    models.dispose()
+    finish()
+    expect(await result).toEqual([null])
+    expect(monaco.created).toEqual([])
+    expect(monaco.models.size).toBe(0)
+    // and nothing new is read or created afterwards
+    expect(await models.resolve([{ uri: 'file:///d/other.ts', range }])).toEqual([])
+    expect(readFile).toHaveBeenCalledTimes(1)
+    expect(monaco.created).toEqual([])
+  })
 })

@@ -9,6 +9,7 @@ import { doctor, findExecutable, searchDirs } from '../src/doctor'
 import { ExitCode } from '../src/errors'
 import { countInjectedBlocks, injectScriptBlock, removeScriptBlocks } from '../src/html'
 import { asarPathForRoot, candidateAppRoots, resolveTarget } from '../src/locate'
+import { adHocSign, GATEKEEPER_NOTE } from '../src/macos'
 
 describe('html injection', () => {
   const html = '<!doctype html>\n<html>\n<HEAD data-x="1">\n<title>x</title>\n</HEAD>\n</html>\n'
@@ -124,5 +125,29 @@ describe('versions', () => {
   it('parses the injector banner', () => {
     expect(parseInjectorVersion('/*! @mlp/orca-injector v0.1.0 */\n"use strict"')).toBe('0.1.0')
     expect(parseInjectorVersion('nothing')).toBeNull()
+  })
+})
+
+describe('macOS re-signing note', () => {
+  it('warns about code identity, keychain, TCC, auto-update and reverting', async () => {
+    const calls: string[][] = []
+    const ctx = createContext({
+      platform: 'darwin',
+      env: {},
+      homeDir: '/nowhere',
+      logger: silentLogger,
+      runCommand: async (command, args) => {
+        calls.push([command, ...args])
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+    await adHocSign(ctx, '/Applications/Orca.app')
+    // behaviour unchanged: still a deep ad-hoc signature
+    expect(calls).toEqual([
+      ['codesign', '--force', '--deep', '--sign', '-', '/Applications/Orca.app']
+    ])
+    for (const needle of [/--deep/, /cdhash/, /safeStorage/, /TCC/, /auto-update/, /reinstall/i]) {
+      expect(GATEKEEPER_NOTE).toMatch(needle)
+    }
   })
 })

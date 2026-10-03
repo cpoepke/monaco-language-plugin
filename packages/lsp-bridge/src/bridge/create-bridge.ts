@@ -10,7 +10,7 @@ import { JsonRpcPeer } from '../rpc/json-rpc-peer'
 import { SessionManager } from '../sessions/session-manager'
 import type { ClientId } from '../sessions/session-types'
 import { BRIDGE_VERSION } from '../version'
-import { tokensEqual } from './auth'
+import { isAllowedOrigin, isLoopbackHostHeader, tokensEqual } from './auth'
 import { normalizeBridgeOptions } from './bridge-options'
 import type { BridgeOptions } from './bridge-options'
 import { createClientHandlers } from './client-handlers'
@@ -51,7 +51,10 @@ export function createBridge(bridgeOptions: BridgeOptions): Bridge {
     notifyClient: (clientId, method, params) => clients.get(clientId)?.peer.notify(method, params)
   })
 
-  const resolution: ServerResolutionContext = { overrides: options.serverOverrides }
+  const resolution: ServerResolutionContext = {
+    overrides: options.serverOverrides,
+    ...(options.extraBinDirs ? { extraDirs: options.extraBinDirs } : {})
+  }
 
   function status(): BridgeStatus {
     return {
@@ -82,7 +85,8 @@ export function createBridge(bridgeOptions: BridgeOptions): Bridge {
       id: nextClientId++,
       greeted: false,
       closed: false,
-      usedRoots: new Set()
+      usedRoots: new Set(),
+      pendingRequests: new Map()
     }
     const handlers = createClientHandlers(context, state)
     const peer = new JsonRpcPeer({
@@ -120,6 +124,10 @@ export function createBridge(bridgeOptions: BridgeOptions): Bridge {
     })
     socket.on('close', () => {
       state.closed = true
+      for (const controller of state.pendingRequests.values()) {
+        controller.abort()
+      }
+      state.pendingRequests.clear()
       peer.close()
       clients.delete(state.id)
       sessions.releaseClient(state.id)
@@ -136,6 +144,22 @@ export function createBridge(bridgeOptions: BridgeOptions): Bridge {
     socket.on('error', () => {})
     if (closing) {
       rejectUpgrade(socket, '503 Service Unavailable')
+      return
+    }
+    // Why: a web page the user visits can open WebSockets to 127.0.0.1 and
+    // a DNS-rebinding page can even make its requests look same-origin; the
+    // token is the real guard, these checks refuse such pages before it is
+    // ever compared. Orca's renderer sends `Origin: file://`.
+    if (!options.allowRemote && !isLoopbackHostHeader(request.headers.host)) {
+      log.warn('rejected connection with a non-loopback Host header', {
+        remote: request.socket.remoteAddress
+      })
+      rejectUpgrade(socket, '403 Forbidden')
+      return
+    }
+    if (!options.allowRemote && !isAllowedOrigin(request.headers.origin)) {
+      log.warn('rejected connection from a foreign origin', { origin: request.headers.origin })
+      rejectUpgrade(socket, '403 Forbidden')
       return
     }
     const url = new URL(request.url ?? '/', 'http://localhost')

@@ -1,6 +1,8 @@
 // Adapted from stablyai/orca PR #14873 (MIT). See vendor/orca-lsp.
-import type { LspConnection } from '../lsp/lsp-connection'
+import type { LspConnection, LspExitInfo } from '../lsp/lsp-connection'
 import type { WorkspaceFolder } from '../lsp/initialize-params'
+import type { WatchedFilesService } from '../workspace/watched-files'
+import type { PrefixMapping } from './uri-mapping'
 
 /** Identifies one WebSocket client connection inside the bridge. */
 export type ClientId = number
@@ -46,4 +48,13 @@ export type Session = {
   /** canonical client-URI key → document key. */
   aliases: Map<string, string>
   idleTimer: NodeJS.Timeout | null
+  /** openDocument calls between lookup and addOwner; such a session is not
+   *  idle even when it has no documents, so it must not be evicted. */
+  pendingOpens: number
+  /** Per client: how its URIs spell realpath directories (symlinked roots). */
+  clientMappings: Map<ClientId, PrefixMapping[]>
+  /** Created when the server registers didChangeWatchedFiles watchers. */
+  watchedFiles: WatchedFilesService | null
+  /** Set once the process is gone. */
+  exitInfo: LspExitInfo | null
 }

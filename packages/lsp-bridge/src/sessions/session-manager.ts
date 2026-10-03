@@ -9,14 +9,16 @@ import type {
 import type { BridgeLogger } from '../logger'
 import { canonicalFileUriKey } from '../lsp/file-uri-key'
 import { buildLspInitializeParams, workspaceFoldersFor } from '../lsp/initialize-params'
-import { LspConnection } from '../lsp/lsp-connection'
+import { LspConnection, LspResponseError } from '../lsp/lsp-connection'
 import type { LspExitInfo } from '../lsp/lsp-connection'
 import type { ResolvedLspServer } from '../lsp/server-catalog'
 import { replyToServerRequest } from '../lsp/server-requests'
 import { spawnLspServer } from '../lsp/server-spawn'
 import type { SpawnLspServer } from '../lsp/server-spawn'
 import { invalidParams, RpcError } from '../rpc/rpc-error'
+import { WatchedFilesService } from '../workspace/watched-files'
 import type { ClientId, Session, SessionDocument } from './session-types'
+import { derivePrefixMapping, rememberMapping, rewriteResultUris } from './uri-mapping'
 
 const MAX_CRASHES = 3
 const CRASH_WINDOW_MS = 5 * 60_000
@@ -52,6 +54,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+const WATCHED_FILES_METHOD = 'workspace/didChangeWatchedFiles'
+
+type NoSession = Extract<OpenDocumentResult, { sessionId: null }>
+
+function noSession(reason: string, retryable: boolean): NoSession {
+  return { sessionId: null, reason, retryable }
+}
+
 function sessionNotFound(sessionId: string): RpcError {
   return new RpcError(JsonRpcErrorCodes.SessionNotFound, `Unknown session: ${sessionId}`)
 }
@@ -66,6 +76,8 @@ export class SessionManager {
   private readonly sessionsById = new Map<string, Session>()
   /** Connections shutting down after leaving the maps; awaited by closeAll. */
   private readonly stopping = new Set<Promise<void>>()
+  /** Detached connections whose process has not exited yet (pids()). */
+  private readonly exiting = new Set<LspConnection>()
   private readonly crashesByKey = new Map<string, number[]>()
   private nextSessionNumber = 1
   private closed = false
@@ -74,41 +86,48 @@ export class SessionManager {
 
   async openDocument(args: OpenDocumentArgs): Promise<OpenDocumentResult> {
     if (this.closed) {
-      return { sessionId: null, reason: 'bridge is shutting down' }
+      return noSession('bridge is shutting down', true)
     }
     const key = `${args.server.serverId}\0${args.rootPath}`
     let session = this.sessionsByKey.get(key)
     if (!session) {
       const crashReason = this.crashLoopReason(key, args.server.serverId, args.rootPath)
       if (crashReason) {
-        return { sessionId: null, reason: crashReason }
+        return noSession(crashReason, false)
       }
       if (!this.makeRoomForSession()) {
-        return {
-          sessionId: null,
-          reason: `too many language servers running (max ${this.options.maxSessions})`
-        }
+        return noSession(
+          `too many language servers running (max ${this.options.maxSessions})`,
+          true
+        )
       }
       session = this.createSession(args.server, args.rootPath, key)
     }
+    // Why: until addOwner runs the session has no documents and would look
+    // idle to makeRoomForSession / the idle timer of a concurrent open.
+    session.pendingOpens++
     try {
-      await session.initialization
-    } catch (error) {
-      return {
-        sessionId: null,
-        reason: `${args.server.serverId} failed to start: ${
-          error instanceof Error ? error.message : String(error)
-        }${this.stderrSuffix(session)}`
+      try {
+        await session.initialization
+      } catch (error) {
+        return noSession(
+          `${args.server.serverId} failed to start: ${
+            error instanceof Error ? error.message : String(error)
+          }${this.stderrSuffix(session)}`,
+          this.isTransientStartFailure(session, error)
+        )
       }
-    }
-    if (session.state === 'stopped') {
-      return {
-        sessionId: null,
-        reason: `${args.server.serverId} exited during startup${this.stderrSuffix(session)}`
+      if (session.state === 'stopped') {
+        return noSession(
+          `${args.server.serverId} exited during startup${this.stderrSuffix(session)}`,
+          true
+        )
       }
+      this.cancelIdleShutdown(session)
+      this.addOwner(session, args)
+    } finally {
+      session.pendingOpens--
     }
-    this.cancelIdleShutdown(session)
-    this.addOwner(session, args)
     return {
       sessionId: session.sessionId,
       uri: args.clientUri,
@@ -116,6 +135,23 @@ export class SessionManager {
       rootPath: session.rootPath,
       pullDiagnostics: session.pullDiagnostics
     }
+  }
+
+  /** Timeouts and processes that died mid-handshake may work next time; a
+   *  binary that cannot be spawned, or a server that rejected initialize,
+   *  will not. */
+  private isTransientStartFailure(session: Session, error: unknown): boolean {
+    if (session.exitInfo?.error) {
+      return false
+    }
+    if (error instanceof LspResponseError) {
+      return false
+    }
+    return (
+      error instanceof RpcError &&
+      (error.code === JsonRpcErrorCodes.RequestTimeout ||
+        error.code === JsonRpcErrorCodes.SessionNotFound)
+    )
   }
 
   /** Full-text sync; ignored unless this client has the document open. */
@@ -149,6 +185,7 @@ export class SessionManager {
   /** Drop every document a disconnected client held. */
   releaseClient(clientId: ClientId): void {
     for (const session of this.sessionsById.values()) {
+      session.clientMappings.delete(clientId)
       for (const document of [...session.documents.values()]) {
         if (document.owners.delete(clientId)) {
           this.releaseDocumentIfUnowned(session, document)
@@ -162,12 +199,14 @@ export class SessionManager {
     }
   }
 
-  /** Forward an allowlisted request after checking the client owns the document. */
+  /** Forward an allowlisted request after checking the client owns the
+   *  document. Result URIs come back in the client's spelling. */
   async request(
     clientId: ClientId,
     sessionId: string,
     method: string,
-    params: unknown
+    params: unknown,
+    signal?: AbortSignal
   ): Promise<unknown> {
     const session = this.sessionsById.get(sessionId)
     if (!session) {
@@ -175,7 +214,12 @@ export class SessionManager {
     }
     const forwarded = this.rewriteDocumentParams(session, clientId, params)
     await session.initialization
-    return session.connection.request(method, forwarded)
+    const result = await session.connection.request(
+      method,
+      forwarded,
+      signal === undefined ? {} : { signal }
+    )
+    return rewriteResultUris(result, session.clientMappings.get(clientId) ?? [])
   }
 
   status(): ServerStatus[] {
@@ -188,10 +232,16 @@ export class SessionManager {
     }))
   }
 
-  /** Pids of live server processes (diagnostics and tests). */
+  /** Pids of server processes that are still running, including those
+   *  being shut down: a host killing everything on exit must see them. */
   pids(): number[] {
-    return [...this.sessionsById.values()]
-      .map((session) => session.connection.pid)
+    const connections = new Set<LspConnection>(this.exiting)
+    for (const session of this.sessionsById.values()) {
+      connections.add(session.connection)
+    }
+    return [...connections]
+      .filter((connection) => connection.isAlive)
+      .map((connection) => connection.pid)
       .filter((pid): pid is number => pid !== undefined)
   }
 
@@ -223,7 +273,12 @@ export class SessionManager {
             this.handleServerNotification(holder.session, method, params)
           }
         },
-        onServerRequest: (method, params) => replyToServerRequest(method, params, workspaceFolders),
+        onServerRequest: (method, params) => {
+          if (holder.session) {
+            this.trackRegistrations(holder.session, method, params)
+          }
+          return replyToServerRequest(method, params, workspaceFolders)
+        },
         onExit: (info) => {
           if (holder.session) {
             this.handleExit(holder.session, info)
@@ -245,7 +300,11 @@ export class SessionManager {
       pullDiagnostics: false,
       documents: new Map(),
       aliases: new Map(),
-      idleTimer: null
+      idleTimer: null,
+      pendingOpens: 0,
+      clientMappings: new Map(),
+      watchedFiles: null,
+      exitInfo: null
     }
     holder.session = session
     this.sessionsByKey.set(key, session)
@@ -284,12 +343,14 @@ export class SessionManager {
         this.recordCrash(key)
         this.detach(session)
         connection.kill()
+        this.trackExit(connection)
       }
     })
     return session
   }
 
   private handleExit(session: Session, info: LspExitInfo): void {
+    session.exitInfo = info
     const wasLive = session.state !== 'stopped'
     const owners = new Set<ClientId>()
     for (const document of session.documents.values()) {
@@ -330,10 +391,23 @@ export class SessionManager {
     this.sessionsById.delete(session.sessionId)
     session.documents.clear()
     session.aliases.clear()
+    session.clientMappings.clear()
+    session.watchedFiles?.close()
+    session.watchedFiles = null
+  }
+
+  /** Keep a detached connection visible to pids() until its process is gone. */
+  private trackExit(connection: LspConnection): void {
+    if (!connection.isAlive) {
+      return
+    }
+    this.exiting.add(connection)
+    void connection.whenExited().then(() => this.exiting.delete(connection))
   }
 
   private stopSession(session: Session): void {
     this.detach(session)
+    this.trackExit(session.connection)
     const stopped = session.connection.shutdown().catch((error: unknown) => {
       this.options.logger.error('failed to stop language server', {
         sessionId: session.sessionId,
@@ -352,7 +426,11 @@ export class SessionManager {
     // memory-heavy servers (tsserver, rust-analyzer) open indefinitely.
     session.idleTimer = setTimeout(() => {
       session.idleTimer = null
-      if (session.documents.size === 0 && session.state !== 'stopped') {
+      if (
+        session.documents.size === 0 &&
+        session.pendingOpens === 0 &&
+        session.state !== 'stopped'
+      ) {
         this.options.logger.info('stopping idle language server', {
           sessionId: session.sessionId
         })
@@ -375,7 +453,8 @@ export class SessionManager {
       return true
     }
     const idle = [...this.sessionsByKey.values()].find(
-      (session) => session.state === 'running' && session.documents.size === 0
+      (session) =>
+        session.state === 'running' && session.documents.size === 0 && session.pendingOpens === 0
     )
     if (!idle) {
       return false
@@ -451,18 +530,28 @@ export class SessionManager {
       // Why: the server won't republish for unchanged text, so a client joining
       // an already-open document would otherwise never see its diagnostics.
       // setImmediate (not a microtask) so it lands after the open response.
-      const params: DiagnosticsParams = {
-        sessionId: session.sessionId,
-        uri: args.clientUri,
-        diagnostics: document.lastDiagnostics
-      }
-      setImmediate(() =>
+      const diagnostics = document.lastDiagnostics
+      setImmediate(() => {
+        const params: DiagnosticsParams = {
+          sessionId: session.sessionId,
+          uri: args.clientUri,
+          diagnostics: rewriteResultUris(
+            diagnostics,
+            session.clientMappings.get(args.clientId) ?? []
+          ) as unknown[]
+        }
         this.options.notifyClient(args.clientId, BridgeMethods.diagnostics, params)
-      )
+      })
     }
     if (clientKey !== documentKey) {
       document.aliasKeys.add(clientKey)
       session.aliases.set(clientKey, documentKey)
+    }
+    const mapping = derivePrefixMapping(args.clientUri, args.serverUri)
+    if (mapping) {
+      const list = session.clientMappings.get(args.clientId) ?? []
+      rememberMapping(list, mapping)
+      session.clientMappings.set(args.clientId, list)
     }
     const owner = document.owners.get(args.clientId)
     if (owner) {
@@ -533,6 +622,44 @@ export class SessionManager {
     return params
   }
 
+  /**
+   * Servers register `workspace/didChangeWatchedFiles` watchers dynamically;
+   * the bridge then watches the session root and reports matching changes.
+   */
+  private trackRegistrations(session: Session, method: string, params: unknown): void {
+    if (method === 'client/registerCapability') {
+      const registrations = isRecord(params) ? params.registrations : undefined
+      for (const registration of Array.isArray(registrations) ? registrations : []) {
+        if (
+          !isRecord(registration) ||
+          registration.method !== WATCHED_FILES_METHOD ||
+          typeof registration.id !== 'string' ||
+          session.state === 'stopped'
+        ) {
+          continue
+        }
+        session.watchedFiles ??= new WatchedFilesService({
+          root: session.rootPath,
+          logger: this.options.logger,
+          send: (changes) => {
+            if (session.state !== 'stopped') {
+              session.connection.notify(WATCHED_FILES_METHOD, { changes })
+            }
+          }
+        })
+        session.watchedFiles.register(registration.id, registration.registerOptions)
+      }
+    } else if (method === 'client/unregisterCapability') {
+      // Why: the spec's field really is spelled `unregisterations`.
+      const removals = isRecord(params) ? params.unregisterations : undefined
+      for (const removal of Array.isArray(removals) ? removals : []) {
+        if (isRecord(removal) && typeof removal.id === 'string') {
+          session.watchedFiles?.unregister(removal.id)
+        }
+      }
+    }
+  }
+
   private handleServerNotification(session: Session, method: string, params: unknown): void {
     if (method === 'textDocument/publishDiagnostics') {
       if (!isRecord(params) || typeof params.uri !== 'string') {
@@ -548,10 +675,12 @@ export class SessionManager {
       const diagnostics = Array.isArray(params.diagnostics) ? params.diagnostics : []
       document.lastDiagnostics = diagnostics
       for (const [clientId, owner] of document.owners) {
+        const mappings = session.clientMappings.get(clientId) ?? []
         const payload: DiagnosticsParams = {
           sessionId: session.sessionId,
           uri: owner.clientUri,
-          diagnostics
+          // Why: relatedInformation locations name other files by realpath.
+          diagnostics: rewriteResultUris(diagnostics, mappings) as unknown[]
         }
         this.options.notifyClient(clientId, BridgeMethods.diagnostics, payload)
       }

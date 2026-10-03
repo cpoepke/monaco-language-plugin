@@ -1,6 +1,8 @@
 export { createBridge } from './bridge/create-bridge'
 export type { Bridge } from './bridge/create-bridge'
 export type {
+  AllowedRootsProvider,
+  AllowedRootsQuery,
   BridgeOptions,
   HostNavigationResult,
   HostNavigationTarget,
@@ -21,6 +23,6 @@ export type {
   ServerOverride,
   ServerOverrides
 } from './lsp/server-catalog'
-export { resolveExecutable } from './lsp/executable-resolver'
+export { defaultExtraBinDirs, resolveExecutable } from './lsp/executable-resolver'
 export { detectWorkspaceRoot } from './workspace/workspace-root'
 export { BRIDGE_VERSION } from './version'

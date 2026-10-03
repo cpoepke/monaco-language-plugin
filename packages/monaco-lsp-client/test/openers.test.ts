@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { URI } from 'monaco-editor/esm/vs/base/common/uri.js'
 import type * as Monaco from 'monaco-editor'
 import { PEEK_SCHEME } from '../src/location-models'
-import { registerOpeners, resolveEditorOpenTarget, resolveLinkOpenTarget } from '../src/openers'
+import {
+  classifyLink,
+  registerOpeners,
+  resolveEditorOpenTarget,
+  resolveLinkOpenTarget
+} from '../src/openers'
 import { FakeMonaco } from './fake-monaco'
 
 const toFileUri = (path: string) => URI.from({ scheme: 'file', path }).toString()
@@ -92,5 +97,30 @@ describe('registerOpeners', () => {
     )
     expect(await linkOpener!.open(URI.parse('https://example.com'))).toBe(false)
     expect(open).toHaveBeenCalledTimes(2)
+  })
+
+  it('swallows links with schemes that could run commands', async () => {
+    const monaco = new FakeMonaco()
+    const open = vi.fn(async () => true)
+    const blocked: string[] = []
+    registerOpeners(
+      monaco.asMonaco(),
+      open,
+      () => null,
+      (uri) => blocked.push(uri)
+    )
+    const [linkOpener] = monaco.linkOpeners
+    for (const link of [
+      'command:workbench.action.reloadWindow',
+      'javascript:alert(1)',
+      'vscode://x'
+    ]) {
+      // true = handled, so Monaco's command/external openers never see it
+      expect(await linkOpener!.open(URI.parse(link))).toBe(true)
+    }
+    expect(blocked).toHaveLength(3)
+    expect(open).not.toHaveBeenCalled()
+    expect(classifyLink(URI.parse('mailto:a@b.c'))).toBe('external')
+    expect(classifyLink(URI.parse('file:///a.ts'))).toBe('host')
   })
 })

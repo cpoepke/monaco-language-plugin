@@ -147,6 +147,7 @@ export function boot(deps: BootDeps): DebugHandle {
     setTimeout: deps.setTimeout,
     clearTimeout: deps.clearTimeout,
     isVisible,
+    isClientConnected: () => client?.status().connection === 'connected',
     log: log.debug
   })
 

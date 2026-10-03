@@ -12,16 +12,20 @@ export {
   RpcError,
   type BridgeConnectionOptions,
   type BridgeUrlSource,
+  type CancellationTokenLike,
   type ConnectionState,
   type ReconnectOptions,
+  type RequestOptions,
   type WebSocketFactory,
   type WebSocketLike
 } from './connection'
 export {
   MARKER_OWNER,
+  SAFE_LINK_SCHEMES,
   fileUriKey,
   fileUriToPath,
   isLspRange,
+  isSafeLinkTarget,
   isSameFileUri,
   lspDiagnosticsToMonacoMarkers,
   lspDocumentLinkToMonaco,
@@ -42,6 +46,10 @@ export {
 export {
   CHANGE_DEBOUNCE_MS,
   DocumentManager,
+  OPEN_RETRY_INITIAL_MS,
+  OPEN_RETRY_LIMIT,
+  OPEN_RETRY_MAX_MS,
+  isRetryableNoSession,
   type DocumentInfo,
   type DocumentSession,
   type DocumentState
@@ -58,6 +66,7 @@ export {
 export { consoleWarnLogger, type Logger } from './logger'
 export { ModelTracker, type AttachMode } from './model-tracker'
 export {
+  classifyLink,
   resolveEditorOpenTarget,
   resolveLinkOpenTarget,
   type HostAdapter,

@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin'
 
@@ -9,7 +9,8 @@ export function isPathInside(child: string, parent: string): boolean {
   const a = caseInsensitive ? child.toLowerCase() : child
   const b = caseInsensitive ? parent.toLowerCase() : parent
   const rel = relative(b, a)
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+  // Why: compare whole segments — a child literally named `..foo` is inside.
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
 
 /**

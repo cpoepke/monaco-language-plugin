@@ -30,7 +30,8 @@ Orca's local runtime RPC (`files.open`), so the file opens as a normal Orca tab.
      `<userData>/plugins/cpoepke.monaco-lsp/<hash>/`.
    - **Development → Development plugin folder path**, then add the same folder. Orca loads it in
      place, which is handy while you work on the plugin.
-4. Review the permission (_Show desktop notifications_) and choose **Enable plugin**.
+4. Review the permissions (_Show desktop notifications_, _Subscribe to events_) and choose
+   **Enable plugin**.
 5. Install the language servers you want (see below) and run the renderer patcher, so the
    editor actually uses the plugin.
 
@@ -69,8 +70,9 @@ again.
 
 On shutdown, Orca sends a `shutdown` message and the plugin's `deactivate` closes the bridge
 within ~1.5 s. Orca SIGKILLs the worker 2 s after sending it. If closing takes too long, or the
-process exits by another path (IPC disconnect, SIGTERM), the plugin sends SIGTERM to every
-language-server pid synchronously.
+process exits by another path (IPC disconnect, SIGTERM), the plugin synchronously sends SIGTERM
+to every language server's process group, so helpers they started (tsserver, gopls workers) go
+too. That includes servers that are still in the middle of shutting down.
 
 ## Language servers
 
@@ -101,8 +103,11 @@ opening a file in an untrusted repository must not execute its code.
   **Language Servers: Status**.
 - **Cross-file jumps open a peek instead of a tab.** Orca can only open files that are inside
   one of its worktrees, so library files (for example `node_modules/…/lib.d.ts`) always stay in
-  the peek view. If no tab opens for files inside your project either, the plugin could not
-  find `orca-runtime.json`. An installed plugin finds it three directories above its own folder.
+  the peek view. Targets outside every worktree (a globally installed library, `~/.cargo`
+  sources) cannot be previewed at all, because the bridge only reads inside worktrees. If
+  navigation does not work for files inside your project either, the plugin could not find
+  `orca-runtime.json`: without the runtime it cannot learn the worktree roots and serves no
+  files. An installed plugin finds it three directories above its own folder.
   A development plugin falls back to `~/Library/Application Support/orca` (macOS),
   `~/.config/orca` (Linux) or `%USERPROFILE%\AppData\Roaming\orca` (Windows). `orca-dev` is tried
   as well. Outside Orca, set `MLP_ORCA_USER_DATA` to point at the right directory.
@@ -114,15 +119,31 @@ opening a file in an untrusted repository must not execute its code.
 - The bridge listens on **127.0.0.1 only**, on a random ephemeral port.
 - Every WebSocket connection must present a **random 32-byte token**, which is new for each
   bridge start. Only Orca's renderer receives it, through the plugin command. It is redacted
-  from the plugin's log lines.
+  from the plugin's log lines. Handshakes from web pages are refused before the token is even
+  compared: the `Origin` must be absent, `null`, `file://` (Orca's renderer) or a loopback
+  http(s) page, and the `Host` header must name a loopback address (no DNS rebinding).
+- **Files are confined to Orca's worktrees.** The bridge opens documents and serves file reads
+  (for peek views) only inside the worktree roots that Orca's runtime reports (`worktree.list`,
+  realpath'd, cached for 10 s, refreshed when a file falls outside them and on
+  `worktree.created` / `worktree.removed`). A removed worktree stops being readable right away.
+  If the runtime cannot be reached, only roots that were already known stay allowed; if it was
+  never reachable, nothing is served (fail closed). Files that do not exist and `file:` URIs
+  naming another host (UNC paths) are refused.
+- A language server is never started for the filesystem root, your home directory or a
+  directory above it, even when a stray `~/package.json` or `~/.git` exists: the nearest project
+  marker below home wins. The session root is also the limit for what the bridge reads.
 - Clients can only forward an **allowlist of read-only LSP requests** (definition, declaration,
   type definition, implementation, references, hover, document symbols, document links,
   diagnostics). Nothing that edits files or runs commands is forwarded.
+- Server binaries are looked up in `PATH` (absolute entries only; `.` and relative entries are
+  skipped), `~/go/bin` and `~/.cargo/bin`, and are always spawned by absolute path without a
+  shell. Binaries shipped inside the opened project are never run.
 - The Orca runtime auth token from `orca-runtime.json` (a 0600 file) is used only to call
   `worktree.list` and `files.open`. It is never logged.
-- The plugin asks for one Orca capability, `notifications:show`. Orca's permission dialog
-  states it plainly: like any plugin worker, this one runs as a normal process with your user's
-  permissions.
+- The plugin asks for two Orca capabilities: `notifications:show` (the status summary) and
+  `events:subscribe` (worktree created/removed, to keep the allowed roots current). Orca's
+  permission dialog states it plainly: like any plugin worker, this one runs as a normal process
+  with your user's permissions.
 
 ## Development
 

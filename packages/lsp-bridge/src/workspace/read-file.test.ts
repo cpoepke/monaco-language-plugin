@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { JsonRpcErrorCodes } from '@mlp/protocol'
 import { RpcError } from '../rpc/rpc-error'
 import { isPathInside, realpathLenient } from './path-policy'
-import { MAX_READ_FILE_BYTES, readFileForClient } from './read-file'
+import { filePathFromUri, MAX_READ_FILE_BYTES, readFileForClient } from './read-file'
 
 let base: string
 let root: string
@@ -108,6 +108,18 @@ describe('path policy', () => {
     expect(isPathInside('/a/b', '/a/b')).toBe(true)
     expect(isPathInside('/a/bc', '/a/b')).toBe(false)
     expect(isPathInside('/a', '/a/b')).toBe(false)
+    // Children whose names merely start with two dots are still inside.
+    expect(isPathInside(join('/a', '..foo'), '/a')).toBe(true)
+    expect(isPathInside(join('/a', '..foo', 'x.ts'), '/a')).toBe(true)
+    expect(isPathInside(join('/a', '..'), '/a')).toBe(false)
+  })
+
+  it('filePathFromUri refuses remote hosts but accepts localhost', () => {
+    expect(() => filePathFromUri('file://server/share/a.ts')).toThrow(/Remote file URIs/)
+    expect(() => filePathFromUri('file://192.168.1.2/a.ts')).toThrow(/Remote file URIs/)
+    if (process.platform !== 'win32') {
+      expect(filePathFromUri('file://localhost/tmp/a.ts')).toBe('/tmp/a.ts')
+    }
   })
 
   it('realpathLenient resolves the existing prefix of a missing path', () => {

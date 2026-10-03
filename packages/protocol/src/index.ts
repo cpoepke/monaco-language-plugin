@@ -89,6 +89,9 @@ export const BridgeMethods = {
   closeDocument: 'document/close',
   /** client → bridge request. LspRequestParams → raw LSP result (or null). */
   lspRequest: 'lsp/request',
+  /** client → bridge notification. CancelRequestParams. Best effort: the bridge
+   *  forwards `$/cancelRequest` for the matching in-flight `lsp/request`. */
+  cancelRequest: 'lsp/cancel',
   /** client → bridge request. ReadFileParams → ReadFileResult. */
   readFile: 'fs/readFile',
   /** client → bridge request. OpenLocationParams → OpenLocationResult. */
@@ -189,6 +192,14 @@ export type OpenDocumentResult =
       sessionId: null
       /** Why no session was attached (unsupported language, server missing, …). */
       reason: string
+      /**
+       * True when the same open may succeed later without anything changing
+       * on the client's side (session cap reached, initialize timed out,
+       * server exited during startup, bridge shutting down); false when it
+       * will not (unsupported language, server not installed, crash loop).
+       * Absent from older bridges: treat as unknown.
+       */
+      retryable?: boolean
     }
 
 export type ChangeDocumentParams = {
@@ -207,6 +218,11 @@ export type LspRequestParams = {
   sessionId: string
   method: LspRequestMethod
   params: unknown
+}
+
+export type CancelRequestParams = {
+  /** JSON-RPC id of the client's pending `lsp/request` call to cancel. */
+  id: JsonRpcId
 }
 
 export type ReadFileParams = {

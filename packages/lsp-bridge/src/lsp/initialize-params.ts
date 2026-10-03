@@ -39,7 +39,13 @@ export function buildLspInitializeParams(rootPath: string): object {
         publishDiagnostics: { relatedInformation: true, versionSupport: true },
         diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false }
       },
-      workspace: { workspaceFolders: true, configuration: true },
+      workspace: {
+        workspaceFolders: true,
+        configuration: true,
+        // Why: gopls and rust-analyzer don't watch the disk themselves; they
+        // register watchers and expect the client to report file changes.
+        didChangeWatchedFiles: { dynamicRegistration: true, relativePatternSupport: true }
+      },
       window: { workDoneProgress: false }
     }
   }
