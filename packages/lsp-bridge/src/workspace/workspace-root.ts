@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { isPathInside } from './path-policy'
+import { isPathInside, realpathLenient } from './path-policy'
 
 /** Filesystem probe, injectable so root detection stays a pure function of it. */
 export type RootProbe = {
@@ -23,6 +24,27 @@ export type DetectRootOptions = {
   /** Never walk above this directory (an allowed root). */
   boundary?: string
   probe?: RootProbe
+  /** The user's home directory (realpath). Defaults to os.homedir(). */
+  home?: string
+}
+
+let cachedHome: string | null = null
+
+/** os.homedir(), realpath'd once (macOS/NixOS homes can be symlinks). */
+export function realHomeDir(): string {
+  cachedHome ??= realpathLenient(homedir())
+  return cachedHome
+}
+
+/**
+ * Directories a session must never be rooted at: the filesystem root, the
+ * user's home directory and every ancestor of it (`/home`, `/Users`). A
+ * server rooted there indexes everything the user owns, and the session root
+ * doubles as the scope of `fs/readFile`, so a stray `~/package.json` or
+ * `~/.git` must not widen it to the whole home directory.
+ */
+export function isForbiddenRoot(dir: string, home: string = realHomeDir()): boolean {
+  return dirname(dir) === dir || isPathInside(home, dir)
 }
 
 const TS_MARKERS = ['tsconfig.json', 'jsconfig.json', 'package.json']
@@ -93,19 +115,20 @@ function languageRoot(languageId: string, dirs: readonly string[], probe: RootPr
  * Workspace root a language server should be started for, given an absolute
  * file path. Walks up from the file's directory looking for the language's
  * project markers; falls back to the nearest `.git` and then to the file's own
- * directory. Never returns a directory above `boundary`.
+ * directory. Never returns a directory above `boundary`, and never the
+ * filesystem root, the home directory or an ancestor of it (markers there are
+ * skipped, so the nearest marker below home wins). Null when even the file's
+ * own directory is one of those.
  */
 export function detectWorkspaceRoot(
   filePath: string,
   languageId: string,
   options: DetectRootOptions = {}
-): string {
+): string | null {
   const probe = options.probe ?? nodeRootProbe
-  const dirs = ancestors(filePath, options.boundary)
+  const home = options.home ?? realHomeDir()
+  const dirs = ancestors(filePath, options.boundary).filter((dir) => !isForbiddenRoot(dir, home))
   return (
-    languageRoot(languageId, dirs, probe) ??
-    nearestWith(dirs, ['.git'], probe) ??
-    dirs[0] ??
-    dirname(filePath)
+    languageRoot(languageId, dirs, probe) ?? nearestWith(dirs, ['.git'], probe) ?? dirs[0] ?? null
   )
 }

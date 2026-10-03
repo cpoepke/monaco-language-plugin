@@ -87,6 +87,19 @@ export class TestClient {
     })
   }
 
+  /** Like requestRaw, but also hands back the JSON-RPC id (for lsp/cancel). */
+  requestTracked(
+    method: string,
+    params?: unknown
+  ): { id: number; response: Promise<JsonRpcResponse> } {
+    const id = this.nextId++
+    const response = new Promise<JsonRpcResponse>((resolve) => {
+      this.responses.set(id, resolve)
+    })
+    this.socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
+    return { id, response }
+  }
+
   async request<T>(method: string, params?: unknown): Promise<T> {
     const response = await this.requestRaw(method, params)
     if (response.error) {

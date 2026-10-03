@@ -6,11 +6,15 @@
 //   --pull               advertise diagnosticProvider (pull diagnostics)
 //   --ignore-shutdown    never answer `shutdown`, ignore `exit` and SIGTERM
 //   --spawn-grandchild   start a long-lived child process (process-group test)
+//   --register-watchers  register workspace/didChangeWatchedFiles watchers
+//                        (`**/*.go` and a relative `go.mod`) after initialized
 //
 // Behaviour:
 //   didOpen/didChange    publish one diagnostic describing the event
 //   text "CRASH"         exit(3) on didOpen/didChange containing it
 //   definition           Location at 0:0 in the same document
+//   typeDefinition       LocationLink into two.ts next to the document
+//   documentLink         one link whose target is two.ts next to the document
 //   hover                markdown whose value is JSON of the server's state
 //   references           never answered (timeout tests)
 //   documentSymbol       answered with an error (error forwarding tests)
@@ -24,7 +28,8 @@ const state = {
   serverRequestReplies: {},
   open: {},
   events: [],
-  cancelled: []
+  cancelled: [],
+  watchedChanges: []
 }
 
 if (flags.has('--ignore-shutdown')) {
@@ -104,6 +109,26 @@ function handle(message) {
       serverRequest('workspace/workspaceFolders', null)
       serverRequest('client/registerCapability', { registrations: [] })
       serverRequest('custom/unknownRequest', {})
+      if (flags.has('--register-watchers')) {
+        const root = state.initializeParams.rootUri
+        serverRequest('client/registerCapability', {
+          registrations: [
+            {
+              id: 'watch-1',
+              method: 'workspace/didChangeWatchedFiles',
+              registerOptions: {
+                watchers: [
+                  { globPattern: '**/*.go' },
+                  { globPattern: { baseUri: root, pattern: 'go.mod' }, kind: 1 | 4 }
+                ]
+              }
+            }
+          ]
+        })
+      }
+      return
+    case 'workspace/didChangeWatchedFiles':
+      state.watchedChanges.push(...params.changes)
       return
     case 'textDocument/didOpen': {
       const doc = params.textDocument
@@ -139,6 +164,34 @@ function handle(message) {
           {
             uri: params.textDocument.uri,
             range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }
+          }
+        ]
+      })
+      return
+    case 'textDocument/typeDefinition': {
+      const target = params.textDocument.uri.replace(/[^/]+$/, 'two.ts')
+      const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }
+      write({
+        id,
+        result: [
+          {
+            targetUri: target,
+            targetRange: range,
+            targetSelectionRange: range,
+            originSelectionRange: range
+          }
+        ]
+      })
+      return
+    }
+    case 'textDocument/documentLink':
+      write({
+        id,
+        result: [
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+            target: params.textDocument.uri.replace(/[^/]+$/, 'two.ts'),
+            data: { nested: { uri: 'file:///elsewhere/x.ts' } }
           }
         ]
       })

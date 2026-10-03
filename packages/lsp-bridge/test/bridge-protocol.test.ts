@@ -9,7 +9,7 @@ import { BridgeMethods, bridgeUrl, JsonRpcErrorCodes, PROTOCOL_VERSION } from '@
 import type { BridgeStatus, OpenLocationResult } from '@mlp/protocol'
 import { createBridge } from '../src/index'
 import type { Bridge, BridgeOptions, HostNavigationTarget } from '../src/index'
-import { FAKE_SERVER_PATH, RpcResponseError, TestClient } from './helpers/test-client'
+import { FAKE_SERVER_PATH, pollFor, RpcResponseError, TestClient } from './helpers/test-client'
 
 const TOKEN = 'protocol-test-token'
 let workspace: string
@@ -59,7 +59,11 @@ async function connect(port: number, hello = true): Promise<TestClient> {
   return client
 }
 
-function upgradeStatus(port: number, token: string | null): Promise<number> {
+function upgradeStatus(
+  port: number,
+  token: string | null,
+  extraHeaders: Record<string, string> = {}
+): Promise<number> {
   return new Promise((resolve, reject) => {
     const path = token === null ? '/' : `/?token=${encodeURIComponent(token)}`
     const req = request({
@@ -67,6 +71,7 @@ function upgradeStatus(port: number, token: string | null): Promise<number> {
       port,
       path,
       headers: {
+        ...extraHeaders,
         Connection: 'Upgrade',
         Upgrade: 'websocket',
         'Sec-WebSocket-Version': '13',
@@ -113,6 +118,50 @@ describe('authentication', () => {
     })
     expect(status).toBe(426)
     expect(() => createBridge({ port: 0, token: TOKEN, host: '0.0.0.0' })).toThrow(/non-loopback/)
+  })
+})
+
+describe('Origin and Host checks', () => {
+  it('accepts no Origin, null, file:// and loopback http(s) origins', async () => {
+    const { port } = await startBridge()
+    for (const origin of [
+      null,
+      'null',
+      'file://',
+      `http://127.0.0.1:5173`,
+      'http://localhost:3000',
+      'https://[::1]:8443'
+    ]) {
+      const headers: Record<string, string> = origin === null ? {} : { Origin: origin }
+      expect({ origin, status: await upgradeStatus(port, TOKEN, headers) }).toEqual({
+        origin,
+        status: 101
+      })
+    }
+  })
+
+  it('rejects foreign origins even with the right token', async () => {
+    const { port } = await startBridge()
+    for (const origin of [
+      'https://evil.example',
+      'http://127.0.0.1.evil.example',
+      'chrome-extension://abc',
+      'garbage'
+    ]) {
+      expect({ origin, status: await upgradeStatus(port, TOKEN, { Origin: origin }) }).toEqual({
+        origin,
+        status: 403
+      })
+    }
+  })
+
+  it('rejects non-loopback Host headers (DNS rebinding) unless allowRemote', async () => {
+    const { port } = await startBridge()
+    expect(await upgradeStatus(port, TOKEN, { Host: `evil.example:${port}` })).toBe(403)
+    expect(await upgradeStatus(port, TOKEN, { Host: `localhost:${port}` })).toBe(101)
+    expect(await upgradeStatus(port, TOKEN, { Host: `[::1]:${port}` })).toBe(101)
+    const remote = await startBridge({ allowRemote: true })
+    expect(await upgradeStatus(remote.port, TOKEN, { Host: `devbox:${remote.port}` })).toBe(101)
   })
 })
 
@@ -223,7 +272,11 @@ describe('request validation', () => {
       languageId: 'markdown',
       text: '# hi'
     })
-    expect(result).toEqual({ sessionId: null, reason: 'unsupported language: markdown' })
+    expect(result).toEqual({
+      sessionId: null,
+      reason: 'unsupported language: markdown',
+      retryable: false
+    })
     await expectRpcError(
       client.request(BridgeMethods.openDocument, {
         uri: 'https://x/a.ts',
@@ -236,6 +289,139 @@ describe('request validation', () => {
       client.request(BridgeMethods.openDocument, []),
       JsonRpcErrorCodes.InvalidParams
     )
+  })
+})
+
+describe('containment', () => {
+  it('refuses to open files that do not exist, so they cannot pick a session root', async () => {
+    // Reviewer repro: opening file:///mlp-nonexistent.ts rooted a session at
+    // `/`, after which fs/readFile served /etc/passwd.
+    const { port } = await startBridge()
+    const client = await connect(port)
+    await expectRpcError(
+      client.request(BridgeMethods.openDocument, {
+        uri: 'file:///mlp-nonexistent.ts',
+        languageId: 'typescript',
+        text: ''
+      }),
+      JsonRpcErrorCodes.InvalidParams
+    )
+    await expectRpcError(
+      client.request(BridgeMethods.readFile, { uri: pathToFileURL('/etc/passwd').href }),
+      JsonRpcErrorCodes.PathNotAllowed
+    )
+  })
+
+  it('rejects remote (UNC) file URIs before touching the filesystem', async () => {
+    const { port } = await startBridge()
+    const client = await connect(port)
+    for (const uri of ['file://attacker.example/share/a.ts', 'file://192.168.0.9/c$/a.ts']) {
+      const open = await expectRpcError(
+        client.request(BridgeMethods.openDocument, { uri, languageId: 'typescript', text: '' }),
+        JsonRpcErrorCodes.InvalidParams
+      )
+      expect(open.message).toMatch(/Remote file URIs/)
+      await expectRpcError(
+        client.request(BridgeMethods.readFile, { uri }),
+        JsonRpcErrorCodes.InvalidParams
+      )
+    }
+  })
+
+  it('evaluates a dynamic allowedRoots provider on every open and read', async () => {
+    let roots: string[] = []
+    const queries: string[] = []
+    const { port } = await startBridge({
+      allowedRoots: async ({ path }) => {
+        queries.push(path)
+        return roots
+      }
+    })
+    const client = await connect(port)
+    const aPath = join(workspace, 'src', 'a.ts')
+    const aUri = pathToFileURL(aPath).href
+    // No roots yet: everything is refused (fail closed).
+    await expectRpcError(client.openDocument(aPath, 'typescript'), JsonRpcErrorCodes.PathNotAllowed)
+    roots = [workspace]
+    const opened = await client.openDocument(aPath, 'typescript')
+    expect(opened).toMatchObject({ rootPath: workspace })
+    await expect(client.request(BridgeMethods.readFile, { uri: aUri })).resolves.toMatchObject({
+      uri: aUri
+    })
+    await expectRpcError(
+      client.request(BridgeMethods.readFile, { uri: pathToFileURL(join(outsideDir, 'b.ts')).href }),
+      JsonRpcErrorCodes.PathNotAllowed
+    )
+    // The root goes away (worktree removed): reads stop even though the
+    // client still has a session there.
+    roots = []
+    await expectRpcError(
+      client.request(BridgeMethods.readFile, { uri: aUri }),
+      JsonRpcErrorCodes.PathNotAllowed
+    )
+    expect(queries).toContain(aPath)
+  })
+
+  it('fails closed when the provider throws', async () => {
+    const { port } = await startBridge({
+      allowedRoots: () => {
+        throw new Error('runtime down')
+      }
+    })
+    const client = await connect(port)
+    await expectRpcError(
+      client.openDocument(join(workspace, 'src', 'a.ts'), 'typescript'),
+      JsonRpcErrorCodes.PathNotAllowed
+    )
+  })
+})
+
+describe('lsp/cancel', () => {
+  it('cancels a pending lsp/request with RequestCancelled and tells the server', async () => {
+    const { port } = await startBridge({ requestTimeoutMs: 10_000 })
+    const client = await connect(port)
+    const aPath = join(workspace, 'src', 'a.ts')
+    const uri = pathToFileURL(aPath).href
+    const opened = await client.openDocument(aPath, 'typescript')
+    if (opened.sessionId === null) throw new Error(opened.reason)
+    // The fake server never answers references.
+    const pending = client.requestTracked(BridgeMethods.lspRequest, {
+      sessionId: opened.sessionId,
+      method: 'textDocument/references',
+      params: {
+        textDocument: { uri },
+        position: { line: 0, character: 0 },
+        context: { includeDeclaration: true }
+      }
+    })
+    const serverState = async (): Promise<{ cancelled: number[]; events: string[] }> => {
+      const hover = await client.lsp<{ contents: { value: string } }>(
+        opened.sessionId as string,
+        'textDocument/hover',
+        { textDocument: { uri }, position: { line: 0, character: 0 } }
+      )
+      return JSON.parse(hover.contents.value) as { cancelled: number[]; events: string[] }
+    }
+    // Cancel once the server is actually working on it.
+    await pollFor(
+      async () => ((await serverState()).events.includes('textDocument/references') ? true : null),
+      5000,
+      'references to reach the server'
+    )
+    const started = Date.now()
+    client.notify(BridgeMethods.cancelRequest, { id: pending.id })
+    const response = await pending.response
+    expect(response.error?.code).toBe(-32800)
+    expect(Date.now() - started).toBeLessThan(5_000)
+    // Unknown ids are ignored; the connection keeps working.
+    client.notify(BridgeMethods.cancelRequest, { id: 'nope' })
+    const hover = await client.lsp<{ contents: { value: string } }>(
+      opened.sessionId,
+      'textDocument/hover',
+      { textDocument: { uri }, position: { line: 0, character: 0 } }
+    )
+    const state = JSON.parse(hover.contents.value) as { cancelled: number[] }
+    expect(state.cancelled).toHaveLength(1)
   })
 })
 

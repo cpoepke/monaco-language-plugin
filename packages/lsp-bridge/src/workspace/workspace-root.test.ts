@@ -86,9 +86,36 @@ describe('detectWorkspaceRoot', () => {
     )
   })
 
+  it('never roots a session at the filesystem root, home or an ancestor of home', () => {
+    const home = join(base, 'home', 'me')
+    // Stray markers in home and above it are skipped.
+    touch('home/me/package.json', '{}')
+    mkdirSync(join(home, '.git'))
+    touch('home/go.work')
+    touch('home/me/proj/src/a.ts')
+    expect(detectWorkspaceRoot(join(home, 'proj/src/a.ts'), 'typescript', { home })).toBe(
+      join(home, 'proj/src')
+    )
+    expect(detectWorkspaceRoot(join(home, 'proj/a.go'), 'go', { home })).toBe(join(home, 'proj'))
+    // Nearest marker below home still wins.
+    touch('home/me/proj/tsconfig.json', '{}')
+    expect(detectWorkspaceRoot(join(home, 'proj/src/a.ts'), 'typescript', { home })).toBe(
+      join(home, 'proj')
+    )
+    // A file directly in home (or above it) gets no root at all.
+    expect(detectWorkspaceRoot(join(home, 'scratch.ts'), 'typescript', { home })).toBeNull()
+    expect(detectWorkspaceRoot(join(base, 'home', 'x.py'), 'python', { home })).toBeNull()
+    // Outside home, everything but the filesystem root is fair game.
+    const probe = { exists: (p: string) => p === join('/', '.git'), readText: () => null }
+    expect(detectWorkspaceRoot('/opt/x/a.rs', 'rust', { probe, home })).toBe('/opt/x')
+    expect(detectWorkspaceRoot('/a.ts', 'typescript', { probe, home })).toBeNull()
+  })
+
   it('uses an injectable probe (pure function)', () => {
     const existing = new Set(['/v/proj/go.mod'])
     const probe = { exists: (p: string) => existing.has(p), readText: () => null }
-    expect(detectWorkspaceRoot('/v/proj/a/b/c.go', 'go', { probe })).toBe('/v/proj')
+    expect(detectWorkspaceRoot('/v/proj/a/b/c.go', 'go', { probe, home: '/home/me' })).toBe(
+      '/v/proj'
+    )
   })
 })

@@ -2,7 +2,8 @@ import { JsonRpcErrorCodes } from '@mlp/protocol'
 import type { JsonRpcError, JsonRpcId, JsonRpcResponse } from '@mlp/protocol'
 import { RpcError } from './rpc-error'
 
-export type RpcRequestHandler = (method: string, params: unknown) => unknown
+/** `id` is the request's JSON-RPC id (for cancellation bookkeeping). */
+export type RpcRequestHandler = (method: string, params: unknown, id: JsonRpcId) => unknown
 export type RpcNotificationHandler = (method: string, params: unknown) => void
 
 export type JsonRpcPeerOptions = {
@@ -114,7 +115,7 @@ export class JsonRpcPeer {
 
   private async dispatchRequest(id: JsonRpcId, method: string, params: unknown): Promise<void> {
     try {
-      const result = await this.options.onRequest(method, params)
+      const result = await this.options.onRequest(method, params, id)
       // Why: `result` is required on success; undefined would be dropped by JSON.
       this.write({ jsonrpc: '2.0', id, result: result === undefined ? null : result })
     } catch (error) {
