@@ -73,6 +73,8 @@ export type OrcaSimOptions = {
   fixtures?: string[]
   /** Log page console messages and plugin logs to stdout. */
   verbose?: boolean
+  /** Turn on the injector's debug log (localStorage mlp.debug). */
+  injectorDebug?: boolean
 }
 
 export class OrcaSim {
@@ -109,7 +111,15 @@ export class OrcaSim {
     this.pluginHost = new SimPluginHost({
       pluginKey: PLUGIN_KEY,
       rootDir: this.pluginRoot,
-      grantedCapabilities: ['notifications:show'],
+      // The user consented to everything the manifest asks for ("Review & enable").
+      grantedCapabilities:
+        (
+          JSON.parse(
+            fs.readFileSync(path.join(INSTALLED_PLUGIN_DIR, 'orca-plugin.json'), 'utf8')
+          ) as {
+            capabilities?: { kind: string }[]
+          }
+        ).capabilities?.map((c) => c.kind) ?? [],
       mainEnv: {
         PATH: desktopLaunchPath(),
         HOME: os.homedir(),
@@ -178,6 +188,15 @@ export class OrcaSim {
     await page.exposeFunction('__orcaSimMain_readFile', (filePath: string) =>
       fs.readFileSync(filePath, 'utf8')
     )
+    if (this.options.injectorDebug || process.env.ORCA_SIM_INJECTOR_DEBUG === '1') {
+      await page.addInitScript(() => {
+        try {
+          localStorage.setItem('mlp.debug', '1')
+        } catch {
+          // file:// storage unavailable
+        }
+      })
+    }
     // The preload: contextBridge.exposeInMainWorld('api', {...}) before any page script.
     await page.addInitScript(() => {
       const w = window as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>

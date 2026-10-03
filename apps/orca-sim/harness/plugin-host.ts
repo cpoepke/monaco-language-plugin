@@ -118,6 +118,15 @@ export class SimPluginHost {
     return this.invokeOn(worker, commandId, args)
   }
 
+  private nextEventId = 0
+
+  /** plugin-worker-manager deliverEvent: only to a running worker, acked by the worker. */
+  deliverEvent(event: string, payload: unknown): void {
+    const worker = this.worker
+    if (!worker || worker.exited || !worker.child.connected) return
+    worker.child.send({ type: 'deliverEvent', eventId: this.nextEventId++, event, payload })
+  }
+
   /** Simulate a crash: SIGKILL the worker (the supervisor then restarts it). */
   kill(): number | null {
     const pid = this.pid
@@ -274,6 +283,8 @@ export class SimPluginHost {
             })
             return
           }
+          case 'eventAck':
+            return
           case 'log':
             this.log((message.level as 'info') ?? 'info', String(message.message))
             return

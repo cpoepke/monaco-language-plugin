@@ -41,6 +41,8 @@ for (const c of CASES) {
 
     test.beforeAll(async ({ browser }) => {
       sim = await OrcaSim.launch(browser, { verbose: process.env.ORCA_SIM_VERBOSE === '1' })
+      await openFile(sim.page, entry)
+      await waitForAttached(sim.page, entry, 120_000)
     })
 
     test.afterAll(async () => {
@@ -73,8 +75,6 @@ for (const c of CASES) {
 
     test('connects through the plugin and shows hover docs from the other file', async () => {
       const page = sim.page
-      await openFile(page, entry)
-      await waitForAttached(page, entry, 120_000)
       expect(sim.invokes[0]).toMatchObject({ commandId: 'mlp.ensureBridge', ok: true })
 
       const hover = page.locator('.monaco-hover:not(.hidden)')
@@ -91,12 +91,14 @@ for (const c of CASES) {
     test('Peek Definition previews the unopened file through an mlp-peek model', async () => {
       const page = sim.page
       const peek = page.locator('.peekview-widget')
+      // Retry until the peek shows the other file (servers still loading may answer with the
+      // same-file import binding, e.g. tsserver's syntax server).
       await expect(async () => {
+        await page.keyboard.press('Escape')
         await placeCursor(page, c.line, c.call)
         await trigger(page, 'editor.action.peekDefinition')
-        await expect(peek).toBeVisible({ timeout: 10_000 })
+        await expect(peek.locator('.peekview-title')).toContainText(targetName, { timeout: 5_000 })
       }).toPass({ timeout: 60_000 })
-      await expect(peek.locator('.peekview-title')).toContainText(targetName)
       await expect
         .poll(async () =>
           (await peek.locator('.view-lines').first().innerText()).replace(/ /g, ' ')

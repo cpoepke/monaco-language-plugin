@@ -120,11 +120,19 @@ test.describe('orca integration (typescript)', () => {
     await closeFile(page, target)
     await waitForEditor(page, entry)
     const peek = page.locator('.peekview-widget')
-    await placeCursor(page, c.line, c.call)
-    await trigger(page, 'editor.action.peekDefinition')
-    await expect(peek).toBeVisible()
+    // tsserver answers from its syntax server (same-file import binding) until the project has
+    // loaded, so retry until the peek shows the other file.
+    await expect(async () => {
+      await page.keyboard.press('Escape')
+      await placeCursor(page, c.line, c.call)
+      await trigger(page, 'editor.action.peekDefinition')
+      await expect(peek.locator('.peekview-title')).toContainText(path.basename(target), {
+        timeout: 5_000
+      })
+    }).toPass({ timeout: 60_000 })
     const opensBefore = sim.runtime.callsTo('files.open').length
-    await peek.locator('.ref-tree .monaco-list-row').first().dblclick()
+    const row = peek.locator('.ref-tree .monaco-list-row').first()
+    await row.dblclick()
     await expect.poll(async () => (await simState(page)).active).toBe(target)
     expect(sim.runtime.callsTo('files.open').length).toBe(opensBefore + 1)
     await waitForEditor(page, target)
