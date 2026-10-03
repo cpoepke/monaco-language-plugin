@@ -37,6 +37,7 @@ export class FakeEditor implements EditorLike {
   private readonly modelListeners = new Set<Listener>()
   private readonly contentListeners = new Set<Listener>()
   private readonly disposeListeners = new Set<Listener>()
+  private readonly selectionListeners = new Set<(e: { source: string }) => void>()
 
   getModel(): FakeModel | null {
     return this.model
@@ -49,8 +50,16 @@ export class FakeEditor implements EditorLike {
     this.model!.text = text
     for (const l of [...this.contentListeners]) l()
   }
-  setSelection(range: RangeLike): void {
+  setSelection(range: RangeLike, source = 'api'): void {
     this.selection = range
+    for (const l of [...this.selectionListeners]) l({ source })
+  }
+  getSelection(): RangeLike | null {
+    return this.selection
+  }
+  onDidChangeCursorSelection(listener: (e: { source: string }) => void) {
+    this.selectionListeners.add(listener)
+    return { dispose: () => this.selectionListeners.delete(listener) }
   }
   revealRangeInCenter(range: RangeLike): void {
     this.revealed = range

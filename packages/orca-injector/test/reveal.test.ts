@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   canonicalFileKey,
   CONTENT_WAIT_MS,
   isModelReady,
   isSameFile,
+  MAX_REVEAL_REAPPLY,
   PENDING_TTL_MS,
+  REVEAL_GUARD_MS,
   revealWhenReady,
   RevealWatcher
 } from '../src/reveal'
@@ -69,6 +71,59 @@ describe('revealWhenReady', () => {
     await clock.tick(3)
     await expect(done).resolves.toBe(false)
     expect(editor.revealed).toBeNull()
+  })
+
+  it('re-applies the reveal when the host restores its saved selection right after', async () => {
+    // Orca: restoreMonacoViewState → requestAnimationFrame(() => { setSelections(saved);
+    // setScrollTop(saved) }) from onMount, which React may run after our two frames.
+    const clock = new FrameClock()
+    const editor = new FakeEditor()
+    editor.setModel(new FakeModel(target, 'a\nb\nc\n'))
+    const done = revealWhenReady(editor, pending, clock)
+    await clock.tick(2)
+    await expect(done).resolves.toBe(true)
+    expect(editor.selection).toEqual(range(3, 5))
+    editor.setSelection(range(1, 1)) // the host's programmatic restore
+    editor.revealed = range(1, 1) // ...and its scroll restore in the same callback
+    expect(editor.selection).toEqual(range(1, 1))
+    await flush()
+    expect(editor.selection).toEqual(range(3, 5))
+    expect(editor.revealed).toEqual(range(3, 5))
+  })
+
+  it('stops guarding on a user cursor move, after the window, and after MAX re-applies', async () => {
+    const clock = new FrameClock()
+    const fresh = async (): Promise<FakeEditor> => {
+      const editor = new FakeEditor()
+      editor.setModel(new FakeModel(target, 'a\nb\nc\n'))
+      const done = revealWhenReady(editor, pending, clock)
+      await clock.tick(2)
+      await done
+      return editor
+    }
+    const user = await fresh()
+    user.setSelection(range(2, 1), 'mouse')
+    user.setSelection(range(1, 1))
+    await flush()
+    expect(user.selection).toEqual(range(1, 1))
+
+    vi.useFakeTimers()
+    try {
+      const late = await fresh()
+      vi.advanceTimersByTime(REVEAL_GUARD_MS + 1)
+      late.setSelection(range(1, 1))
+      await flush()
+      expect(late.selection).toEqual(range(1, 1))
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const stubborn = await fresh()
+    for (let i = 0; i < MAX_REVEAL_REAPPLY + 2; i++) {
+      stubborn.setSelection(range(1, 1))
+      await flush()
+    }
+    expect(stubborn.selection).toEqual(range(1, 1))
   })
 
   it('isModelReady needs content and enough lines', () => {

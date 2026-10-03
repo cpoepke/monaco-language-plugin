@@ -31,6 +31,9 @@ export type EditorLike = {
   onDidChangeModel(listener: () => void): DisposableLike
   onDidChangeModelContent(listener: () => void): DisposableLike
   onDidDispose(listener: () => void): DisposableLike
+  /** Used to keep the reveal when the host restores its saved selection right after mount. */
+  getSelection?(): RangeLike | null
+  onDidChangeCursorSelection?(listener: (event: { source: string }) => void): DisposableLike
 }
 
 export type EditorApiLike = {
@@ -44,6 +47,16 @@ export type PendingReveal = { uri: string; key: string; range: RangeLike; at: nu
 export const PENDING_TTL_MS = 10_000
 /** Reveal anyway after this long even if the model still looks empty. */
 export const CONTENT_WAIT_MS = 1_500
+/**
+ * After revealing, re-apply the reveal (at most MAX_REVEAL_REAPPLY times) when the host moves the
+ * selection programmatically within this window. Orca restores a tab's saved selection one
+ * animation frame after its `onMount`, which React runs some time after Monaco created the editor
+ * (we see the editor at creation), so that restore can land after our two-frame wait.
+ */
+export const REVEAL_GUARD_MS = 1_000
+export const MAX_REVEAL_REAPPLY = 3
+/** Cursor-change sources that are programmatic (setSelection(s) / restoreViewState), not the user. */
+const PROGRAMMATIC_SOURCES = new Set(['api', 'restoreState'])
 /** monaco.editor.ScrollType.Immediate */
 const SCROLL_IMMEDIATE = 1
 
@@ -88,6 +101,78 @@ export type RevealDeps = {
   /** Resolves on the next animation frame (with a timer fallback for hidden windows). */
   frame(): Promise<void>
   log?(message: string): void
+  setTimeout?(fn: () => void, ms: number): unknown
+  clearTimeout?(handle: unknown): void
+}
+
+const sameRange = (a: RangeLike | null | undefined, b: RangeLike): boolean =>
+  a != null &&
+  a.startLineNumber === b.startLineNumber &&
+  a.startColumn === b.startColumn &&
+  a.endLineNumber === b.endLineNumber &&
+  a.endColumn === b.endColumn
+
+/**
+ * Keep a fresh reveal for REVEAL_GUARD_MS: if something other than the user (Orca's view-state
+ * restore) moves the selection away, apply the reveal again once that callback has finished (a
+ * microtask later, so it also wins over the scrollTop the host restores after the selection).
+ * Any user-driven cursor change (mouse, keyboard, commands) ends the guard.
+ */
+export function guardReveal(editor: EditorLike, pending: PendingReveal, deps: RevealDeps): void {
+  if (typeof editor.onDidChangeCursorSelection !== 'function') return
+  const setTimer = deps.setTimeout ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
+  const clearTimer =
+    deps.clearTimeout ??
+    ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>))
+  const subs: DisposableLike[] = []
+  let done = false
+  let applying = false
+  let reapplied = 0
+  let timer: unknown = null
+  const stop = (): void => {
+    if (done) return
+    done = true
+    clearTimer(timer)
+    for (const sub of subs.splice(0)) sub.dispose()
+  }
+  try {
+    subs.push(
+      editor.onDidChangeCursorSelection((event) => {
+        if (done || applying) return
+        if (!PROGRAMMATIC_SOURCES.has(event?.source)) {
+          stop()
+          return
+        }
+        if (sameRange(editor.getSelection?.(), pending.range)) return
+        if (reapplied >= MAX_REVEAL_REAPPLY) {
+          stop()
+          return
+        }
+        reapplied++
+        queueMicrotask(() => {
+          if (done) return
+          if (modelKey(editor) !== pending.key) {
+            stop()
+            return
+          }
+          deps.log?.(`selection moved by the host after the reveal; revealing again`)
+          applying = true
+          try {
+            applyReveal(editor, pending.range)
+          } finally {
+            applying = false
+          }
+        })
+      })
+    )
+    subs.push(editor.onDidChangeModel(stop))
+    subs.push(editor.onDidDispose(stop))
+  } catch (error) {
+    deps.log?.(`cannot guard the reveal: ${String(error)}`)
+    stop()
+    return
+  }
+  timer = setTimer(stop, REVEAL_GUARD_MS)
 }
 
 const modelKey = (editor: EditorLike): string | null => {
@@ -113,6 +198,7 @@ export async function revealWhenReady(
     const model = editor.getModel()!
     if (isModelReady(model, pending.range) || deps.now() - start >= CONTENT_WAIT_MS) {
       applyReveal(editor, pending.range)
+      guardReveal(editor, pending, deps)
       return true
     }
     await deps.frame()
