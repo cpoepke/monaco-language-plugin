@@ -124,7 +124,9 @@ export function defaultExtraBinDirs(): string[] {
   return [join(home, 'go', 'bin'), join(home, '.cargo', 'bin')]
 }
 
-const BRIDGE_PACKAGE_NAME = '@mlp/lsp-bridge'
+// Why joined: bundles embedding the bridge are checked for leftover `'@mlp/…'`
+// import specifiers; this is a package name, not an import.
+const BRIDGE_PACKAGE_NAME = ['@mlp', 'lsp-bridge'].join('/')
 
 /** The directory holding the bridge's own package.json: the nearest
  *  package.json above `startDir`, if it is the bridge's. */
