@@ -238,43 +238,47 @@ describe('networking', () => {
 })
 
 describe('--root', () => {
+  // Why plaintext: containment is checked before the language, so a file inside a root is answered
+  // with "unsupported language" (no language server gets started), a file outside with PathNotAllowed.
+  const unsupported = { sessionId: null, reason: 'unsupported language: plaintext' }
+
   it('confines documents to the given roots (relative roots resolve against the cwd)', async () => {
     const inside = path.join(tmp, 'inside')
     const outside = path.join(tmp, 'outside')
     mkdirSync(inside)
     mkdirSync(outside)
-    writeFileSync(path.join(inside, 'a.ts'), 'export {}\n')
-    writeFileSync(path.join(outside, 'b.ts'), 'export {}\n')
+    writeFileSync(path.join(inside, 'a.txt'), 'hello\n')
+    writeFileSync(path.join(outside, 'b.txt'), 'hello\n')
     const relative = path.relative(process.cwd(), inside)
     const line = printed(
       await start(['--port', '0', '--print-url', '--root', relative, '--token', 't'])
     )
     const client = await TestClient.connectAndHello(line.port, 't')
     await expect(
-      client.openDocument(path.join(outside, 'b.ts'), 'typescript')
-    ).rejects.toMatchObject({
-      code: -32003
-    })
-    // inside the root the document is accepted by the path policy (a server may or may not exist)
-    const result = await client.openDocument(path.join(inside, 'a.ts'), 'typescript')
-    expect(result).toBeDefined()
+      client.openDocument(path.join(outside, 'b.txt'), 'plaintext')
+    ).rejects.toMatchObject({ code: -32003 })
+    expect(await client.openDocument(path.join(inside, 'a.txt'), 'plaintext')).toMatchObject(
+      unsupported
+    )
     await client.close()
   })
 
   it('is repeatable', async () => {
     const one = path.join(tmp, 'one')
     const two = path.join(tmp, 'two')
-    mkdirSync(one)
-    mkdirSync(two)
-    writeFileSync(path.join(two, 'b.ts'), 'export {}\n')
+    const three = path.join(tmp, 'three')
+    for (const dir of [one, two, three]) mkdirSync(dir)
+    writeFileSync(path.join(two, 'b.txt'), 'hello\n')
+    writeFileSync(path.join(three, 'c.txt'), 'hello\n')
     const line = printed(
       await start(['--port', '0', '--print-url', '--root', one, '--root', two, '--token', 't'])
     )
     const client = await TestClient.connectAndHello(line.port, 't')
-    // not rejected as PathNotAllowed: it lies inside the second root
-    await client.openDocument(path.join(two, 'b.ts'), 'typescript').then(
-      () => undefined,
-      (error: { code: number }) => expect(error.code).not.toBe(-32003)
+    expect(await client.openDocument(path.join(two, 'b.txt'), 'plaintext')).toMatchObject(
+      unsupported
+    )
+    await expect(client.openDocument(path.join(three, 'c.txt'), 'plaintext')).rejects.toMatchObject(
+      { code: -32003 }
     )
     await client.close()
   })
