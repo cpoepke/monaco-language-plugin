@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProbeResult } from '@mlp/lsp-bridge'
 import { ExitCode } from '@mlp/orca-patch-core'
 import { main } from '../src/cli'
@@ -361,23 +361,19 @@ setTimeout(() => process.exit(s.exit ?? 0), s.sleepMs ?? 0)
   it('CLI: prints text and JSON with the same truth, exit 2 when something is unusable', async () => {
     install('gopls', { stdout: 'gopls v1', exit: 0 })
     const lines: string[] = []
-    const original = console.log
-    console.log = (m?: unknown) => void lines.push(String(m))
-    const saved = { ...process.env }
-    process.env.PATH = dir
-    process.env.Path = dir
-    process.env.PATHEXT = '.CMD;.EXE'
-    process.env.HOME = home
-    process.env.USERPROFILE = home
+    const spy = vi
+      .spyOn(console, 'log')
+      .mockImplementation((m?: unknown) => void lines.push(String(m)))
+    const defaults = {
+      env: { PATH: dir, Path: dir, PATHEXT: '.CMD;.EXE' },
+      homeDir: home,
+      logger: silentLogger
+    }
     try {
-      expect(await main(['doctor', '--json'])).toBe(ExitCode.NeedsAction)
-      expect(await main(['doctor'])).toBe(ExitCode.NeedsAction)
+      expect(await main(['doctor', '--json'], defaults)).toBe(ExitCode.NeedsAction)
+      expect(await main(['doctor'], defaults)).toBe(ExitCode.NeedsAction)
     } finally {
-      console.log = original
-      for (const key of ['PATH', 'Path', 'PATHEXT', 'HOME', 'USERPROFILE']) {
-        if (saved[key] === undefined) delete process.env[key]
-        else process.env[key] = saved[key]
-      }
+      spy.mockRestore()
     }
     const json = JSON.parse(lines[0] ?? '{}') as DoctorReport
     expect(json.entries.find((e) => e.language === 'Go')).toMatchObject({

@@ -33,7 +33,19 @@ export function uncache(asarPath: string): void {
 /** All entries of an archive keyed by posix path, read from its header (no extraction). */
 export function readEntries(asarPath: string): Map<string, AsarEntry> {
   uncache(asarPath)
-  const { header } = asar.getRawHeader(asarPath) as unknown as { header: HeaderNode }
+  let header: HeaderNode
+  try {
+    header = (asar.getRawHeader(asarPath) as unknown as { header: HeaderNode }).header
+  } catch (error) {
+    // Why: a truncated or non-asar file otherwise surfaces as a bare RangeError/stack trace.
+    throw new PatcherError(
+      `${asarPath} is not a readable asar archive (${error instanceof Error ? error.message : String(error)}). ` +
+        'The file may be truncated or damaged; reinstall Orca, or run `monaco-lsp-orca uninstall` ' +
+        'to restore a backup. Nothing was changed.',
+      undefined,
+      'unexpected-layout'
+    )
+  }
   const out = new Map<string, AsarEntry>()
   const walk = (node: HeaderNode, prefix: string): void => {
     for (const [name, child] of Object.entries(node.files ?? {})) {

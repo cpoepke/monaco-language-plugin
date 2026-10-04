@@ -89,7 +89,7 @@ export async function main(argv: string[], defaults: InstallOptions = {}): Promi
       return report.exitCode
     }
     case 'doctor': {
-      const report = doctor()
+      const report = doctor(defaults)
       console.log(values.json ? JSON.stringify(report, null, 2) : formatDoctor(report))
       return report.exitCode
     }
@@ -109,22 +109,27 @@ function isEntryPoint(): boolean {
 
 if (isEntryPoint()) void run()
 
-function run(): Promise<void> {
-  return main(process.argv.slice(2)).then(
-    (code) => {
-      process.exitCode = code
-    },
-    (error: unknown) => {
-      if (error instanceof PatcherError) {
-        consoleLogger.error(error.message)
-        process.exitCode = error.exitCode
-      } else if (String((error as { code?: unknown }).code).startsWith('ERR_PARSE_ARGS')) {
-        consoleLogger.error(`${(error as Error).message}\n\n${USAGE}`)
-        process.exitCode = ExitCode.Error
-      } else {
-        consoleLogger.error(error instanceof Error ? (error.stack ?? error.message) : String(error))
-        process.exitCode = ExitCode.Error
-      }
+/**
+ * `main` plus the error-to-exit-code mapping of the executable: expected failures
+ * (PatcherError) and bad arguments print one message and exit 1/2, anything else prints its stack.
+ */
+export async function runCli(argv: string[], defaults: InstallOptions = {}): Promise<number> {
+  try {
+    return await main(argv, defaults)
+  } catch (error) {
+    if (error instanceof PatcherError) {
+      consoleLogger.error(error.message)
+      return error.exitCode
     }
-  )
+    if (String((error as { code?: unknown }).code).startsWith('ERR_PARSE_ARGS')) {
+      consoleLogger.error(`${(error as Error).message}\n\n${USAGE}`)
+      return ExitCode.Error
+    }
+    consoleLogger.error(error instanceof Error ? (error.stack ?? error.message) : String(error))
+    return ExitCode.Error
+  }
+}
+
+async function run(): Promise<void> {
+  process.exitCode = await runCli(process.argv.slice(2))
 }

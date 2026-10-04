@@ -20,10 +20,12 @@ export const defaultRunCommand: CommandRunner = (command, args) =>
       (error, stdout, stderr) => {
         const code =
           error == null ? 0 : typeof error.code === 'number' ? error.code : error.code ? 127 : 1
+        // Why: a command that could not be started has no output; its error is the only reason.
+        const startFailed = error != null && typeof error.code !== 'number'
         resolve({
           code,
           stdout: String(stdout ?? ''),
-          stderr: String(stderr ?? error?.message ?? '')
+          stderr: String(stderr || (startFailed ? error.message : ''))
         })
       }
     )

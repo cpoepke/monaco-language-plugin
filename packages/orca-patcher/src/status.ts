@@ -6,6 +6,7 @@ import {
   type ExitCodeValue,
   inspectAsar,
   readBackupMeta,
+  readEntries,
   readPending,
   readUserConfig,
   sha256File,
@@ -53,6 +54,14 @@ export async function status(options: StatusOptions = {}): Promise<StatusReport>
   const ctx = createContext(options)
   const target = resolveTarget(ctx, options.app)
   const info = inspectAsar(target.asarPath)
+  // Why: inspectAsar answers "unknown version, not patched" for a truncated or damaged archive;
+  // say so instead of suggesting `install`, which would fail on it.
+  let damaged: string | null = null
+  try {
+    readEntries(target.asarPath)
+  } catch (error) {
+    damaged = error instanceof Error ? error.message : String(error)
+  }
   const patched = info.injectedBlocks > 0
   const record = readState(ctx).installs[target.asarPath] ?? null
   const patchedOrcaVersion = info.versionInfo?.orcaVersion ?? record?.orcaVersion ?? null
@@ -83,7 +92,9 @@ export async function status(options: StatusOptions = {}): Promise<StatusReport>
       : null
 
   const actions: string[] = []
-  if (!patched && pending) {
+  if (damaged) {
+    actions.push(damaged)
+  } else if (!patched && pending) {
     actions.push(
       'The Orca plugin re-patched Orca; the change is applied when you quit Orca. Restart Orca to activate it.'
     )
