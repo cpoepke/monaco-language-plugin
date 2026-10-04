@@ -1,7 +1,15 @@
 import { spawnSync } from 'node:child_process'
 import { windowsSpawnArgs } from './server-spawn'
 
-export type ProbeResult = { ok: true } | { ok: false; reason: string }
+/** `version` is the first non-empty output line of a successful probe (shown by `doctor`). */
+export type ProbeResult = { ok: true; version?: string } | { ok: false; reason: string }
+
+function firstLine(text: string): string | undefined {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0)
+}
 
 /** Runs a server's cheap version command to prove the binary actually works. */
 export type ServerProbe = (executablePath: string, args: readonly string[]) => ProbeResult
@@ -48,16 +56,14 @@ export const defaultServerProbe: ServerProbe = (executablePath, args) => {
   } else if (run.error) {
     verdict = { ok: false, reason: run.error.message }
   } else if (run.status !== 0) {
-    const detail = `${run.stderr ?? ''}\n${run.stdout ?? ''}`
-      .split('\n')
-      .map((line) => line.trim())
-      .find((line) => line.length > 0)
+    const detail = firstLine(`${run.stderr ?? ''}\n${run.stdout ?? ''}`)
     verdict = {
       ok: false,
       reason: `exited with ${run.status ?? run.signal}${detail ? `: ${detail}` : ''}`
     }
   } else {
-    verdict = { ok: true }
+    const version = firstLine(`${run.stdout ?? ''}\n${run.stderr ?? ''}`)
+    verdict = version ? { ok: true, version } : { ok: true }
   }
   verdicts.set(key, verdict)
   return verdict

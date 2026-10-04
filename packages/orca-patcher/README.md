@@ -16,6 +16,41 @@ monaco-lsp-orca doctor    [--json]
 `index.html` and repacks the archive. `uninstall` restores the backup (or strips the injection when
 there is none).
 
+## doctor: do the language servers actually work?
+
+`monaco-lsp-orca doctor` asks the bridge's own resolver (the same server catalog, search
+directories and version-command probe the plugin uses) about every supported server, so it reports
+what Orca would do rather than just whether a file exists:
+
+```
+  ok       Go                     gopls → /home/me/go/bin/gopls  (golang.org/x/tools/gopls v0.23.0)
+  broken   Rust                   rust-analyzer → /home/me/.cargo/bin/rust-analyzer
+                                  exited with 1: error: Unknown binary 'rust-analyzer' in official toolchain 'stable'.
+                                  fix: rustup component add rust-analyzer
+  missing  Python                 install: npm install -g pyright   (or: pipx install basedpyright)
+  warning  TypeScript/JavaScript  /home/me/.local/bin/typescript-language-server is not on PATH; add /home/me/.local/bin to PATH
+```
+
+- `ok`: a binary was found on PATH, `~/go/bin` or `~/.cargo/bin` and its version command
+  (`--version` / `version`) exits 0. The first output line is shown.
+- `broken`: a binary exists but the version command fails (for example rustup's `rust-analyzer`
+  proxy without the component). The first stderr/stdout line is shown with a targeted fix:
+  `rustup component add rust-analyzer`, reinstalling `typescript-language-server`, `pyright`,
+  `gopls`, or a generic "reinstall" hint. The bridge treats such a binary as not installed.
+- `missing`: nothing found; the install command for your OS is shown.
+- `warning` (`"status": "off-path"` in JSON): found only in a common install dir outside PATH.
+
+Within a language the first working candidate wins (e.g. `typescript-language-server`, then `tsgo`);
+a broken first candidate with a working fallback is reported as `ok` with a note.
+
+`--json` prints the same data: `{ entries: [{ language, status, found, version?, reason?, hint,
+candidates: [{ serverId, binary, status, path?, version?, reason? }] }], node, exitCode }`.
+
+Exit code: `0` when every language has a working server, `2` when any language is missing, off PATH
+or broken (unchanged: any language without a usable server). The version command is run with the
+bridge's 5 s timeout, so doctor cannot hang; a timeout counts as working (a slow machine is not a
+broken install) and verdicts are cached for the process lifetime.
+
 ## After Orca updates: self-repair
 
 Orca updates replace `app.asar` and remove the patch; the plugin folder in Orca's userData

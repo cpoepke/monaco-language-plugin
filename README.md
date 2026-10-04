@@ -51,7 +51,7 @@ cd monaco-language-plugin
 pnpm install && pnpm build
 
 # Quit Orca first. Use sudo for /opt installs on Linux.
-node packages/orca-patcher/dist/cli.js doctor    # which language servers were found
+node packages/orca-patcher/dist/cli.js doctor    # which language servers were found AND work (runs their version command)
 node packages/orca-patcher/dist/cli.js install   # patch Orca + copy the plugin folder
 ```
 
@@ -106,7 +106,8 @@ Other commands:
 - **GUI-launched Orca has a minimal `PATH`.** The plugin also searches Homebrew, `/usr/local`,
   `~/.local/bin`, `~/go/bin`, `/usr/local/go/bin` and `~/.cargo/bin`. gopls also needs `go`
   itself on that path. Servers installed elsewhere (custom toolchain dirs, version managers
-  that rely on shell init) may not be found; `doctor` shows what is detected.
+  that rely on shell init) may not be found; `doctor` shows what is detected and flags servers that exist but fail to run
+  (`broken`, e.g. a rustup `rust-analyzer` proxy without the component) with a fix.
 - **First results can be slow.** tsserver and rust-analyzer take ~10 s to load a project. Until
   then, TypeScript may only resolve same-file symbols.
 - In Peek, **double-click** a result to open the file. Enter only previews it (standalone

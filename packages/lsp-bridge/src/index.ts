@@ -23,6 +23,12 @@ export type {
   ServerOverride,
   ServerOverrides
 } from './lsp/server-catalog'
+export {
+  diagnoseServers,
+  type DiagnoseOptions,
+  type ServerDiagnosis,
+  type ServerStatus
+} from './lsp/diagnose'
 export { defaultExtraBinDirs, resolveExecutable } from './lsp/executable-resolver'
 export { defaultServerProbe, type ProbeResult, type ServerProbe } from './lsp/server-probe'
 export { detectWorkspaceRoot } from './workspace/workspace-root'

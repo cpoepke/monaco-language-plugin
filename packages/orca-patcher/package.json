@@ -27,6 +27,7 @@
     "@electron/asar": "^4.3.1"
   },
   "devDependencies": {
+    "@mlp/lsp-bridge": "workspace:*",
     "@mlp/orca-injector": "workspace:*",
     "@mlp/orca-patch-core": "workspace:*",
     "@mlp/orca-plugin": "workspace:*",
