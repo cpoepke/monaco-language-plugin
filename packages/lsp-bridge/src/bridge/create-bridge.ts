@@ -182,13 +182,20 @@ export function createBridge(bridgeOptions: BridgeOptions): Bridge {
     })
     server.on('upgrade', onUpgrade)
     httpServer = server
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(options.port, options.host, () => {
-        server.off('error', reject)
-        resolve()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(options.port, options.host, () => {
+          server.off('error', reject)
+          resolve()
+        })
       })
-    })
+    } catch (error) {
+      // Why: a bridge whose port was taken must be able to try again (or close
+      // cleanly) instead of reporting "already listening" for a dead server.
+      httpServer = null
+      throw error
+    }
     const address = server.address()
     const port = typeof address === 'object' && address !== null ? address.port : options.port
     log.info('listening', { host: options.host, port })
