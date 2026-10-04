@@ -38,6 +38,8 @@ export type UninstallOptions = CommonOptions & {
   force?: boolean
   /** Also delete the installed plugin folder (~/.monaco-lsp-orca/plugin/...). */
   purge?: boolean
+  /** How long to wait for the patch lock held by another patcher/the plugin (default 30 s). */
+  lockWaitMs?: number
 }
 
 export type UninstallResult = {
@@ -53,7 +55,7 @@ export async function uninstall(options: UninstallOptions = {}): Promise<Uninsta
   logger.info(`Orca: ${target.asarPath}`)
   await assertNotRunning(ctx, target, options.force)
   assertWritable(target)
-  const lock = await lockForPatching(ctx, target)
+  const lock = await lockForPatching(ctx, target, options.lockWaitMs)
   try {
     return await uninstallLocked(ctx, target, options)
   } finally {
@@ -67,6 +69,22 @@ async function uninstallLocked(
   options: UninstallOptions
 ): Promise<UninstallResult> {
   const { logger } = ctx
+  // Why before anything else: inspectAsar reads a truncated or damaged archive as "not patched",
+  // and the "not patched" branch below deletes the backup, which would then be the only good copy.
+  try {
+    readEntries(target.asarPath)
+  } catch (error) {
+    const { backup } = backupPaths(target.asarPath)
+    if (error instanceof PatcherError && exists(backup)) {
+      throw new PatcherError(
+        `${error.message}\nThe backup ${backup} was left untouched; once you have checked it, ` +
+          `copy it over ${target.asarPath} to recover.`,
+        error.exitCode,
+        error.reason
+      )
+    }
+    throw error
+  }
   // Why first: otherwise the plugin's self-repair would patch Orca again on its next start.
   writeUserConfig(ctx.stateDir, { autoRepair: false })
   chownToInvokingUser(ctx, configPath(ctx.stateDir))
