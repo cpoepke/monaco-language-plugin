@@ -319,10 +319,9 @@ setTimeout(() => process.exit(s.exit ?? 0), s.sleepMs ?? 0)
       version: 'golang.org/x/tools/gopls v0.23.0'
     })
     expect(byLang['Go']?.found?.path.toLowerCase()).toBe(gopls.toLowerCase())
-    expect(byLang['Rust']).toMatchObject({
-      status: 'broken',
-      hint: 'rustup component add rust-analyzer'
-    })
+    expect(byLang['Rust']?.status).toBe('broken')
+    // (macOS appends a brew alternative)
+    expect(byLang['Rust']?.hint).toMatch(/^rustup component add rust-analyzer/)
     expect(byLang['Rust']?.reason).toMatch(/^exited with 1: error: Unknown binary 'rust-analyzer'/)
     expect(byLang['Rust']?.found?.path.toLowerCase()).toBe(rust.toLowerCase())
     expect(byLang['TypeScript/JavaScript']?.status).toBe('missing')
