@@ -218,3 +218,106 @@ describe('LocationModels', () => {
     expect(monaco.created).toEqual([])
   })
 })
+
+describe('LocationModels edge cases', () => {
+  it('skips URIs Monaco cannot parse and resolves the rest', async () => {
+    const monaco = fakeMonaco()
+    const parse = monaco.Uri.parse.bind(monaco.Uri)
+    monaco.Uri = {
+      parse: (value: string) => {
+        if (value === 'bad') throw new Error('Unable to parse')
+        return parse(value)
+      },
+      from: URI.from.bind(URI)
+    } as never
+    const result = await new LocationModels(monaco, () => text('x')).resolveEach([
+      { uri: 'bad', range },
+      { uri: 'file:///repo/a.ts', range }
+    ])
+    expect(result[0]).toBeNull()
+    expect(result[1]?.uri.path).toBe('/repo/a.ts')
+  })
+
+  it('reads a file once for several locations in it', async () => {
+    const monaco = fakeMonaco()
+    const readFile = vi.fn<ReadFile>(() => text('x'))
+    const result = await new LocationModels(monaco, readFile).resolve([
+      { uri: 'file:///repo/a.ts', range },
+      { uri: 'file:///repo/a.ts', range },
+      { uri: 'file:///repo/a.ts', range }
+    ])
+    expect(result).toHaveLength(3)
+    expect(readFile).toHaveBeenCalledTimes(1)
+    expect(monaco.created).toHaveLength(1)
+  })
+
+  it('only shows non-file URIs that already have a model, and never reads them', async () => {
+    const monaco = fakeMonaco(['untitled:Untitled-1'])
+    const readFile = vi.fn<ReadFile>()
+    const result = await new LocationModels(monaco, readFile).resolveEach([
+      { uri: 'untitled:Untitled-1', range },
+      { uri: 'jdt://contents/Foo.class', range }
+    ])
+    expect(result[0]?.uri.toString()).toBe('untitled:Untitled-1')
+    expect(result[1]).toBeNull()
+    expect(readFile).not.toHaveBeenCalled()
+  })
+
+  it('leaves a peek model that an editor is showing alone, without reading', async () => {
+    const peek = URI.from({ scheme: PEEK_SCHEME, path: '/repo/a.ts' }).toString()
+    const monaco = fakeMonaco([peek])
+    const readFile = vi.fn<ReadFile>()
+    const result = await new LocationModels(monaco, readFile).resolve([
+      { uri: 'file:///repo/a.ts', range }
+    ])
+    expect(result[0]?.uri.toString()).toBe(peek)
+    expect(readFile).not.toHaveBeenCalled()
+  })
+
+  it('does not touch a peek model that became visible while its file was being read', async () => {
+    const monaco = fakeMonaco()
+    const peekUri = URI.from({ scheme: PEEK_SCHEME, path: '/repo/a.ts' })
+    // a detached stale model exists when the resolve starts ...
+    monaco.editor.createModel('stale', 'typescript', peekUri)
+    const model = monaco.models.get(peekUri.toString())!
+    const readFile = vi.fn<ReadFile>(async () => {
+      // ... and an editor attaches it while the read is in flight
+      model.isAttachedToEditor = () => true
+      return { text: 'fresh', languageId: 'typescript' }
+    })
+    const result = await new LocationModels(monaco, readFile).resolve([
+      { uri: 'file:///repo/a.ts', range }
+    ])
+    expect(result[0]?.uri.toString()).toBe(peekUri.toString())
+    expect(model.setValue).not.toHaveBeenCalled()
+    expect(model.getValue()).toBe('stale')
+  })
+
+  it('keeps an up-to-date detached peek model as it is', async () => {
+    const monaco = fakeMonaco()
+    const peekUri = URI.from({ scheme: PEEK_SCHEME, path: '/repo/a.ts' })
+    monaco.editor.createModel('same', 'typescript', peekUri)
+    const model = monaco.models.get(peekUri.toString())!
+    await new LocationModels(monaco, () => text('same')).resolve([
+      { uri: 'file:///repo/a.ts', range }
+    ])
+    expect(model.setValue).not.toHaveBeenCalled()
+  })
+
+  it('treats a read that rejects as unreadable', async () => {
+    const monaco = fakeMonaco()
+    const result = await new LocationModels(monaco, () =>
+      Promise.reject(new Error('socket'))
+    ).resolve([{ uri: 'file:///repo/a.ts', range }])
+    expect(result).toEqual([])
+    expect(monaco.created).toEqual([])
+  })
+
+  it('creates a model without a language when the bridge does not report one', async () => {
+    const monaco = fakeMonaco()
+    await new LocationModels(monaco, async () => ({ text: 'x', languageId: null })).resolve([
+      { uri: 'file:///repo/a.ts', range }
+    ])
+    expect([...monaco.models.values()][0]?.language).toBeUndefined()
+  })
+})
