@@ -142,7 +142,12 @@ describe('integration with real language servers', () => {
     it.skipIf(!server)(
       `${testCase.language}: go-to-definition across files and hover (${server?.serverId ?? 'missing'})`,
       async () => {
-        const bridge = createBridge({ port: 0, token: TOKEN, allowedRoots: [FIXTURES] })
+        const bridge = createBridge({
+          port: 0,
+          token: TOKEN,
+          allowedRoots: [FIXTURES],
+          trustedRoots: [FIXTURES]
+        })
         const { port } = await bridge.listen()
         let pids: number[] = []
         try {
@@ -225,7 +230,7 @@ describe.skipIf(!tsServer || process.platform === 'win32')('symlinked roots (rea
       const link = join(base, 'linked-ts')
       cpSync(join(FIXTURES, 'ts'), real, { recursive: true })
       symlinkSync(real, link)
-      const bridge = createBridge({ port: 0, token: TOKEN })
+      const bridge = createBridge({ port: 0, token: TOKEN, trustedRoots: [real] })
       const { port } = await bridge.listen()
       try {
         const client = await TestClient.connectAndHello(port, TOKEN)

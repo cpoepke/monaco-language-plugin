@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PatcherError } from '@mlp/orca-patch-core'
 import {
   defaultAssetsDir,
@@ -14,12 +14,23 @@ import { APPIMAGE_HELP, candidateAppRoots, resolveTarget } from '../src/locate'
 import { installedPluginDir, installPluginFolder, pluginInstructions } from '../src/plugin'
 
 const dirs: string[] = []
+beforeEach(() => {
+  const stat = fs.statSync
+  vi.spyOn(fs, 'statSync').mockImplementation((file, options) => {
+    // The default-location tests must not discover the developer's installed app.
+    if (String(file) === '/Applications/Orca.app/Contents/Resources/app.asar') {
+      throw Object.assign(new Error('isolated test filesystem'), { code: 'ENOENT' })
+    }
+    return stat(file, options)
+  })
+})
 const tmp = (): string => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mlp-locate2-')))
   dirs.push(dir)
   return dir
 }
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
 })
 const write = (file: string, content = 'x'): string => {

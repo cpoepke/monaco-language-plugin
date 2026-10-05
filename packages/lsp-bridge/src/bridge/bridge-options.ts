@@ -42,6 +42,9 @@ export type BridgeOptions = {
    * returns no roots.
    */
   allowedRoots?: readonly string[] | AllowedRootsProvider
+  /** Explicitly trusted workspace roots. Empty/omitted means no language
+   * servers may start: servers can execute workspace SDKs and build scripts. */
+  trustedRoots?: readonly string[] | AllowedRootsProvider
   /**
    * Directories searched for server binaries after PATH. Defaults to
    * ~/go/bin, ~/.cargo/bin and the bridge package's own node_modules/.bin.
@@ -63,8 +66,8 @@ export type BridgeOptions = {
   maxMessageBytes?: number
   /**
    * Also look for server binaries in the opened project's `node_modules/.bin`.
-   * Off by default: opening a file in an untrusted repository must never run
-   * an executable that repository ships.
+   * Off by default. This only controls executable lookup; trustedRoots is the
+   * separate authorization to run servers and their workspace-supplied code.
    */
   trustProjectBinaries?: boolean
 }
@@ -75,6 +78,7 @@ export type NormalizedBridgeOptions = {
   token: string
   /** Null when containment is off (no allowedRoots configured). */
   allowedRoots: AllowedRootsResolver | null
+  trustedRoots: AllowedRootsResolver
   allowRemote: boolean
   extraBinDirs: readonly string[] | undefined
   serverOverrides: ServerOverrides
@@ -113,6 +117,12 @@ export function normalizeBridgeOptions(options: BridgeOptions): NormalizedBridge
     host,
     token: options.token,
     allowedRoots: allowedRootsResolver(options.allowedRoots, options.logger ?? silentLogger),
+    trustedRoots: allowedRootsResolver(
+      typeof options.trustedRoots === 'function'
+        ? options.trustedRoots
+        : () => (options.trustedRoots as readonly string[] | undefined) ?? [],
+      options.logger ?? silentLogger
+    )!,
     allowRemote: options.allowRemote === true,
     extraBinDirs: options.extraBinDirs,
     serverOverrides: options.serverOverrides ?? {},

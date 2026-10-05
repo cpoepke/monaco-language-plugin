@@ -384,7 +384,8 @@ describe.skipIf(process.platform === 'win32')('killServersSync with a real bridg
             }
           }
         }),
-      allowedRoots: () => [project]
+      allowedRoots: () => [project],
+      trustedRoots: () => [project]
     })
     const { port, token } = await controller.ensureBridge()
     const client = await TestClient.connectAndHello(port, token)

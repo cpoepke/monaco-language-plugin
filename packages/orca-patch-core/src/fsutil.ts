@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { fs } from './fs.js'
 import os from 'node:os'
 import path from 'node:path'
@@ -26,12 +26,16 @@ export function readJson<T>(file: string): T | null {
   }
 }
 
-/** Write via `<file>.tmp-<pid>` + rename so readers never see a partial file. */
+/** Exclusive, unpredictable temporary file + rename; never follow a planted symlink. */
 export function writeJsonAtomic(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  const tmp = `${file}.tmp-${process.pid}`
-  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`)
-  fs.renameSync(tmp, file)
+  const tmp = `${file}.tmp-${randomBytes(16).toString('hex')}`
+  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+  try {
+    fs.renameSync(tmp, file)
+  } finally {
+    fs.rmSync(tmp, { force: true })
+  }
 }
 
 /**

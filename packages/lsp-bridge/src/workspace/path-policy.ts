@@ -1,7 +1,9 @@
 import { realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
-const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin'
+// macOS also supports case-sensitive volumes. realpath supplies the on-disk
+// spelling; folding it would authorize a distinct sibling such as Repo vs repo.
+const caseInsensitive = process.platform === 'win32'
 
 /** True when `child` is `parent` or lies beneath it. Purely lexical: callers
  *  realpath both sides first so `..` and symlinks cannot escape. */

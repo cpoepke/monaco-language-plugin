@@ -1,4 +1,5 @@
 import type { Stats } from 'node:fs'
+import { constants } from 'node:fs'
 import { open, realpath, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { languageIdForPath } from '@mlp/protocol'
@@ -74,12 +75,36 @@ export async function readFileForClient(
   // Why: stat before open — opening a FIFO for reading would block forever,
   // and opening a directory fails differently per platform.
   assertReadableFile(await stat(realPath), requestedPath)
-  const handle = await open(realPath, 'r')
+  const handle = await open(
+    realPath,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
+  )
   try {
-    assertReadableFile(await handle.stat(), requestedPath)
-    // Why: read via the same handle we stat'ed, so a swap between the checks and
-    // the read cannot slip a different (larger, outside) file through.
-    const buffer = await handle.readFile()
+    const opened = await handle.stat()
+    assertReadableFile(opened, requestedPath)
+    // Recheck after open: an ancestor directory can be replaced with a symlink
+    // between the original realpath check and open. Validate the handle's identity
+    // against the newly authorized path before reading any bytes.
+    const currentPath = await realpath(realPath)
+    if (findContainingRoot(currentPath, allowedRoots) === null) {
+      throw pathNotAllowed(`Path changed outside every allowed root: ${requestedPath}`)
+    }
+    const current = await stat(currentPath)
+    if (current.dev !== opened.dev || current.ino !== opened.ino) {
+      throw pathNotAllowed(`File changed during authorization: ${requestedPath}`)
+    }
+    // Bound the actual read as well as stat: a regular file can grow after stat.
+    const bytes = Buffer.alloc(MAX_READ_FILE_BYTES + 1)
+    let length = 0
+    while (length < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, length, bytes.length - length, length)
+      if (bytesRead === 0) break
+      length += bytesRead
+    }
+    if (length > MAX_READ_FILE_BYTES) {
+      throw invalidParams(`File too large: ${requestedPath}`)
+    }
+    const buffer = bytes.subarray(0, length)
     if (buffer.subarray(0, BINARY_SNIFF_BYTES).includes(0)) {
       throw invalidParams(`Binary file: ${requestedPath}`)
     }

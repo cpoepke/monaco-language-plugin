@@ -1,6 +1,11 @@
 // Adapted from stablyai/orca PR #14873 (MIT). See vendor/orca-lsp.
 import { describe, expect, it } from 'vitest'
-import { encodeLspMessage, LspMessageDecoder } from './message-framing'
+import {
+  encodeLspMessage,
+  LspMessageDecoder,
+  MAX_LSP_BODY_BYTES,
+  MAX_LSP_HEADER_BYTES
+} from './message-framing'
 
 describe('encodeLspMessage', () => {
   it('uses the utf8 byte length, not the string length', () => {
@@ -11,6 +16,16 @@ describe('encodeLspMessage', () => {
 })
 
 describe('LspMessageDecoder', () => {
+  it('rejects oversized and unbounded declarations before buffering the body', () => {
+    for (const size of [String(MAX_LSP_BODY_BYTES + 1), '9'.repeat(100)]) {
+      expect(() =>
+        new LspMessageDecoder().push(Buffer.from(`Content-Length: ${size}\r\n\r\n`))
+      ).toThrow(/too large/)
+    }
+    expect(() => new LspMessageDecoder().push(Buffer.alloc(MAX_LSP_HEADER_BYTES + 1, 65))).toThrow(
+      /too large/
+    )
+  })
   it('decodes a message split across arbitrary chunk boundaries', () => {
     const decoder = new LspMessageDecoder()
     const encoded = encodeLspMessage({ jsonrpc: '2.0', id: 1, result: { value: 'héllo 🎉' } })

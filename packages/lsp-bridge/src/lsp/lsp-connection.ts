@@ -80,9 +80,18 @@ export class LspConnection {
     this.child = spawned.child
     this.processGroup = spawned.processGroup
     const decoder = new LspMessageDecoder()
+    let invalidStream = false
     this.child.stdout.on('data', (chunk: Buffer) => {
-      for (const message of decoder.push(chunk)) {
-        this.handleMessage(message as ServerMessage)
+      if (invalidStream) return
+      try {
+        for (const message of decoder.push(chunk)) {
+          this.handleMessage(message as ServerMessage)
+        }
+      } catch {
+        invalidStream = true
+        this.stderrTail = 'Invalid or oversized language-server message'
+        this.rejectAllPending(new Error(this.stderrTail))
+        this.signal('SIGKILL')
       }
     })
     // Why: an undrained stderr pipe blocks the server once the OS buffer fills

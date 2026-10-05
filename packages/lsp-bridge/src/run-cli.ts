@@ -12,6 +12,9 @@ export const USAGE = `Usage: mlp-bridge [options]
   --root <dir>      Allowed root; repeatable. Without it, documents may be opened
                     anywhere and reads stay inside the opened sessions' roots.
   --host <addr>     Interface to bind (default 127.0.0.1)
+  --trusted-root <dir>
+                    Permit language servers to execute code from this workspace;
+                    repeatable. No workspaces are trusted by default.
   --allow-remote    Permit a non-loopback --host
   --trust-project-binaries
                     Also run servers from the project's node_modules/.bin
@@ -35,6 +38,7 @@ type CliValues = {
   port?: string
   token?: string
   root?: string[]
+  'trusted-root'?: string[]
   host?: string
   'allow-remote'?: boolean
   'trust-project-binaries'?: boolean
@@ -51,6 +55,7 @@ function parseCliArgs(argv: readonly string[]): CliValues | string {
         port: { type: 'string' },
         token: { type: 'string' },
         root: { type: 'string', multiple: true },
+        'trusted-root': { type: 'string', multiple: true },
         host: { type: 'string' },
         'allow-remote': { type: 'boolean' },
         'trust-project-binaries': { type: 'boolean' },
@@ -113,6 +118,7 @@ export async function runCli(
     allowRemote: values['allow-remote'] ?? false,
     trustProjectBinaries: values['trust-project-binaries'] ?? false,
     allowedRoots: (values.root ?? []).map((root) => resolve(root)),
+    trustedRoots: (values['trusted-root'] ?? []).map((root) => resolve(root)),
     logger
   })
   const { port: boundPort } = await bridge.listen()

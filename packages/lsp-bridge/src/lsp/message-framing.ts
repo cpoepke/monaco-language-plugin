@@ -3,6 +3,8 @@
 /** LSP base-protocol framing: `Content-Length: N\r\n\r\n<N bytes of JSON>`. */
 
 const HEADER_TERMINATOR = '\r\n\r\n'
+export const MAX_LSP_BODY_BYTES = 16 * 1024 * 1024
+export const MAX_LSP_HEADER_BYTES = 8 * 1024
 
 export function encodeLspMessage(message: unknown): Buffer {
   const body = Buffer.from(JSON.stringify(message), 'utf8')
@@ -20,6 +22,12 @@ export class LspMessageDecoder {
     for (;;) {
       if (this.expectedBodyLength === null) {
         const headerEnd = this.buffer.indexOf(HEADER_TERMINATOR)
+        if (
+          headerEnd > MAX_LSP_HEADER_BYTES ||
+          (headerEnd === -1 && this.buffer.length > MAX_LSP_HEADER_BYTES)
+        ) {
+          throw new Error('Language-server message header too large')
+        }
         if (headerEnd === -1) {
           return messages
         }
@@ -32,6 +40,12 @@ export class LspMessageDecoder {
           continue
         }
         this.expectedBodyLength = Number(lengthMatch[1])
+        if (
+          !Number.isSafeInteger(this.expectedBodyLength) ||
+          this.expectedBodyLength > MAX_LSP_BODY_BYTES
+        ) {
+          throw new Error('Language-server message body too large')
+        }
       }
       if (this.buffer.length < this.expectedBodyLength) {
         return messages

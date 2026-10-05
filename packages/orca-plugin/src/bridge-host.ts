@@ -29,7 +29,7 @@ export function pluginExtraBinDirs(): string[] {
 
 /** serverId → resolved executable, or null when not installed. */
 export function detectServers(): Record<string, string | null> {
-  return resolveAllServers({ extraDirs: pluginExtraBinDirs() })
+  return resolveAllServers({ extraDirs: pluginExtraBinDirs(), probe: false })
 }
 
 export { BRIDGE_VERSION }

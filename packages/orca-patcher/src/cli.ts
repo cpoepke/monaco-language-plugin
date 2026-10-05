@@ -3,9 +3,9 @@ import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { PATCHER_VERSION } from './constants.js'
-import { consoleLogger } from './context.js'
+import { consoleLogger, createContext } from './context.js'
 import { doctor, formatDoctor } from './doctor.js'
-import { ExitCode, PatcherError } from '@mlp/orca-patch-core'
+import { ExitCode, PatcherError, setWorkspaceTrust } from '@mlp/orca-patch-core'
 import { install, type InstallOptions } from './install.js'
 import { formatStatus, status } from './status.js'
 import { uninstall } from './uninstall.js'
@@ -18,6 +18,11 @@ Usage:
   monaco-lsp-orca uninstall [--app <path>] [--force] [--purge]
   monaco-lsp-orca status    [--app <path>] [--json]
   monaco-lsp-orca doctor    [--json]
+  monaco-lsp-orca trust     <workspace-directory>
+  monaco-lsp-orca untrust   <workspace-directory>
+
+Language servers may execute workspace SDKs and build scripts. Trust only repositories
+whose code you are willing to run. Restart Orca after changing workspace trust.
 
 Options:
   --app <path>       Orca location: Orca.app, install dir, resources dir, app.asar, or an
@@ -68,6 +73,18 @@ export async function main(argv: string[], defaults: InstallOptions = {}): Promi
   }
   const app = values.app ?? defaults.app
   switch (command) {
+    case 'trust':
+    case 'untrust': {
+      if (positionals.length !== 2) throw new Error(`${command} requires one workspace directory`)
+      const ctx = createContext(defaults)
+      if (ctx.system.getuid() === 0)
+        throw new Error('Manage workspace trust as your normal user, without sudo')
+      const root = setWorkspaceTrust(ctx.stateDir, positionals[1]!, command === 'trust')
+      ctx.logger.info(
+        `${command === 'trust' ? 'Trusted' : 'Removed trust for'} ${root}. Restart Orca to apply. Language servers in trusted workspaces can execute project code.`
+      )
+      return ExitCode.Ok
+    }
     case 'install':
       await install({
         ...defaults,

@@ -53,6 +53,9 @@ pnpm install && pnpm build
 # Quit Orca first. Use sudo for /opt installs on Linux.
 node packages/orca-patcher/dist/cli.js doctor    # which language servers were found AND work (runs their version command)
 node packages/orca-patcher/dist/cli.js install   # patch Orca + copy the plugin folder
+
+# Without sudo: allow language servers to execute code from a repository you trust.
+node packages/orca-patcher/dist/cli.js trust /absolute/path/to/your/repository
 ```
 
 Then, one time only, in Orca:
@@ -137,15 +140,27 @@ again). To recover, run `install` without the flag (re-signs ad hoc) or reinstal
 
 ## Security
 
+- **Trust is required before language servers start.** Run
+  `monaco-lsp-orca trust /absolute/path/to/repository` as your normal user, then restart Orca.
+  Use `monaco-lsp-orca untrust /absolute/path/to/repository` and restart Orca to revoke trust
+  and stop existing servers. Trust includes subdirectories; trust individual repositories,
+  not your home directory. The allowlist lives in `~/.monaco-lsp-orca/trusted-workspaces.json`.
+  Merely adding a worktree to Orca does not trust it.
+- Language servers run with your user permissions and **are not sandboxed**. Even a globally
+  installed server can execute repository code: TypeScript can select a workspace SDK and
+  rust-analyzer can run build scripts and procedural macros. Read-only LSP methods do not
+  prevent those actions. Trust only projects and their dependencies you are willing to run.
+  The standalone bridge requires repeatable `--trusted-root <dir>` options; API embedders
+  must supply `trustedRoots`. `--root` alone grants file access, not execution trust.
 - The bridge listens on **127.0.0.1 only**, requires a **random 256-bit token**, and rejects
-  cross-origin pages.
+  foreign web origins (local/opaque origins are allowed; the token remains the primary guard).
 - Only **read-only navigation requests** reach language servers. There is no `executeCommand`,
   workspace edits or configuration changes.
 - Files are read only inside **Orca's worktrees**. The filesystem root and your home directory
   are never used as a project root.
-- Language-server binaries come from your `PATH` and standard install dirs. A repository's own
-  `node_modules/.bin` is **never** used unless you opt in (`--trust-project-binaries` on the
-  standalone bridge).
+- Language-server binaries come from your `PATH` and standard install dirs. The bridge only
+  adds a repository's `node_modules/.bin` to its search when you opt in with
+  `--trust-project-binaries`; keep untrusted directories out of your own `PATH`.
 - Hover markdown is rendered untrusted. Document links are limited to `file:`, `http:` and
   `https:`.
 

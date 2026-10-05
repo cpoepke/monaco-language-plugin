@@ -48,6 +48,7 @@ export type PluginControllerDeps = {
    * reads outside them are refused (see README, Security).
    */
   allowedRoots?: BridgeFactoryOptions['allowedRoots']
+  trustedRoots?: BridgeFactoryOptions['trustedRoots']
   /** Search dirs for server binaries after PATH (the bundle has no bridge
    *  package, so no node_modules/.bin of its own). */
   extraBinDirs?: readonly string[]
@@ -150,6 +151,7 @@ export function createPluginController(deps: PluginControllerDeps): PluginContro
       token,
       hostNavigator: deps.hostNavigator,
       ...(deps.allowedRoots ? { allowedRoots: deps.allowedRoots } : {}),
+      ...(deps.trustedRoots ? { trustedRoots: deps.trustedRoots } : {}),
       ...(deps.extraBinDirs ? { extraBinDirs: deps.extraBinDirs } : {}),
       logger: log,
       // Why: opening a file in an untrusted repo must never run its binaries.

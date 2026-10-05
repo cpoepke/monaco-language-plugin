@@ -194,13 +194,12 @@ describe('main.ts with the real wiring', () => {
         uri: pathToFileURL(path.join(userData, 'secret.ts')).toString()
       })
       expect(read.error?.code).toBe(JsonRpcErrorCodes.PathNotAllowed)
-      // Navigation reports the missing runtime instead of throwing.
-      const nav = await client.request<{ opened: boolean; reason?: string }>('host/openLocation', {
+      // Navigation obeys the same worktree boundary as reads and document opens.
+      const nav = await client.requestRaw('host/openLocation', {
         uri: pathToFileURL(path.join(project, 'a.ts')).toString(),
         range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }
       })
-      expect(nav.opened).toBe(false)
-      expect(nav.reason).toMatch(/runtime_not_found|outside every Orca worktree/)
+      expect(nav.error?.code).toBe(JsonRpcErrorCodes.PathNotAllowed)
       await client.close()
       expect(
         await call<{ running: boolean; port: number }>('mlp.status', { silent: true })

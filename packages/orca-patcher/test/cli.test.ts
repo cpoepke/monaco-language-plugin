@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ExitCode, readUserConfig } from '@mlp/orca-patch-core'
+import { ExitCode, readUserConfig, readTrustedWorkspaces } from '@mlp/orca-patch-core'
 import { main, runCli } from '../src/cli'
 import { PATCHER_VERSION } from '../src/constants'
 import { silentLogger } from '../src/context'
@@ -36,6 +36,15 @@ async function capture<T>(fn: () => Promise<T>): Promise<{ result: T; out: strin
 }
 
 describe('cli: arguments and exit codes', () => {
+  it('explicitly trusts and revokes a workspace without patching Orca', async () => {
+    const f = await fake()
+    const options = { ...f.options, system: { getuid: () => 1000 } }
+    expect(await main(['trust', f.root], options)).toBe(ExitCode.Ok)
+    expect(readTrustedWorkspaces(f.options.stateDir!)).toEqual([fs.realpathSync(f.root)])
+    expect(await main(['untrust', f.root], options)).toBe(ExitCode.Ok)
+    expect(readTrustedWorkspaces(f.options.stateDir!)).toEqual([])
+  })
+
   it('--version prints the version and exits 0, even with a command', async () => {
     const { result, out } = await capture(() => main(['--version']))
     expect(result).toBe(ExitCode.Ok)

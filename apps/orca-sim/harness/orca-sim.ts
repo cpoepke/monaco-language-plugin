@@ -107,6 +107,13 @@ export class OrcaSim {
     )
     fs.cpSync(INSTALLED_PLUGIN_DIR, this.pluginRoot, { recursive: true })
     const fixtures = options.fixtures ?? ['ts', 'py', 'go', 'rust']
+    // Explicit fixture trust is isolated from the developer's real trust store.
+    const trustState = options.workerEnvExtra?.MONACO_LSP_ORCA_HOME ?? this.userData
+    fs.mkdirSync(trustState, { recursive: true })
+    fs.writeFileSync(
+      path.join(trustState, 'trusted-workspaces.json'),
+      JSON.stringify(fixtures.map((name) => fs.realpathSync(path.join(FIXTURES_DIR, name))))
+    )
     this.runtime = new FakeOrcaRuntime({
       userData: this.userData,
       worktreeRoots: fixtures.map((name) => path.join(FIXTURES_DIR, name)),
@@ -135,7 +142,7 @@ export class OrcaSim {
         MLP_ORCA_USER_DATA: path.join(this.userData, 'not-user-data'),
         SECRET_TOKEN: 'must-not-leak'
       },
-      ...(options.workerEnvExtra ? { workerEnvExtra: options.workerEnvExtra } : {}),
+      workerEnvExtra: { MONACO_LSP_ORCA_HOME: trustState, ...options.workerEnvExtra },
       log: options.verbose ? (level, line) => console.log(`[plugin ${level}] ${line}`) : undefined
     })
   }

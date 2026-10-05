@@ -141,6 +141,12 @@ describe('client spellings that differ from the realpath', () => {
 })
 
 describe('path policy', () => {
+  it.skipIf(process.platform === 'win32')(
+    'does not authorize case-distinct sibling directories',
+    () => {
+      expect(isPathInside('/work/Repo/secret', '/work/repo')).toBe(false)
+    }
+  )
   it('isPathInside is segment-aware', () => {
     expect(isPathInside('/a/b/c', '/a/b')).toBe(true)
     expect(isPathInside('/a/b', '/a/b')).toBe(true)

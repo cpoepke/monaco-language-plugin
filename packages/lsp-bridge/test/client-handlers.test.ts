@@ -47,7 +47,13 @@ function setup(options: Partial<BridgeOptions> = {}, greeted = true) {
     pendingRequests: new Map()
   }
   const context: BridgeContext = {
-    options: normalizeBridgeOptions({ port: 0, token: 't', logger: silentLogger, ...options }),
+    options: normalizeBridgeOptions({
+      port: 0,
+      token: 't',
+      trustedRoots: [project],
+      logger: silentLogger,
+      ...options
+    }),
     sessions: sessions as unknown as SessionManager,
     // Why: process.execPath stands in for an installed typescript-language-server.
     resolution: {

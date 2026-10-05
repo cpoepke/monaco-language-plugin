@@ -172,6 +172,11 @@ opening a file in an untrusted repository must not execute its code.
 
 ## Security
 
+- Before language servers can start, explicitly trust the repository with
+  `monaco-lsp-orca trust /absolute/path/to/repository`, then restart Orca.
+  Revoke with `monaco-lsp-orca untrust /absolute/path/to/repository` and restart Orca.
+  Servers are not sandboxed and can execute workspace code. Worktree membership alone
+  does not authorize execution.
 - The bridge listens on **127.0.0.1 only**, on a random ephemeral port.
 - Every WebSocket connection must present a **random 32-byte token**, which is new for each
   bridge start. Only Orca's renderer receives it, through the plugin command. It is redacted

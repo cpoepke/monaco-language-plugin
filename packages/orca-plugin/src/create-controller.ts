@@ -11,6 +11,7 @@ import { createSelfRepair } from './self-repair/self-repair'
 import { applyExtendedPath } from './server-path'
 import { PLUGIN_VERSION } from './version'
 import { createWorktreeRoots } from './worktree-roots'
+import { patcherHome, readTrustedWorkspaces } from '@mlp/orca-patch-core'
 
 /** dist/main.mjs → plugin root (the folder holding orca-plugin.json). */
 function pluginRootFromEntry(): string | null {
@@ -40,6 +41,7 @@ export function createController(): PluginController {
     // Why: without this the bridge would open and read any local file a
     // client names; Orca's worktrees are exactly what its editor shows.
     allowedRoots: ({ path: file }) => worktrees.forPath(file),
+    trustedRoots: () => readTrustedWorkspaces(patcherHome(process.env, homedir())),
     extraBinDirs: pluginExtraBinDirs(),
     onWorktreesChanged: () => worktrees.invalidate(),
     hostNavigationAvailable: () => runtime.metadataPath() !== null,

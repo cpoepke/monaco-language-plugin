@@ -83,7 +83,7 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
     return {
       protocolVersion: PROTOCOL_VERSION,
       bridgeVersion: BRIDGE_VERSION,
-      availableLanguages: availableLanguages(context.resolution),
+      availableLanguages: availableLanguages({ ...context.resolution, probe: false }),
       hostNavigation: options.hostNavigator !== null
     }
   }
@@ -133,6 +133,14 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
       }
     }
     const rootPath = realpathLenient(detected)
+    const trusted = await options.trustedRoots({ path: rootPath })
+    if (findContainingRoot(rootPath, trusted) === null) {
+      return {
+        sessionId: null,
+        reason: `Workspace is not trusted for language-server execution: ${rootPath}. Explicitly trust this workspace, then reconnect.`,
+        retryable: false
+      }
+    }
     const resolution = resolveLspServerForLanguage(
       language,
       context.trustProjectBinaries
@@ -198,6 +206,7 @@ export function createClientHandlers(context: BridgeContext, client: ClientState
   async function openLocation(params: unknown): Promise<OpenLocationResult> {
     const record = expectRecord(params)
     const path = filePathFromUri(record.uri)
+    await containingAllowedRoot(realpathLenient(path), record.uri)
     const range = expectRecord(record.range, 'range')
     const start = expectRecord(range.start, 'range.start')
     const line = expectNonNegativeInteger(start.line, 'range.start.line')

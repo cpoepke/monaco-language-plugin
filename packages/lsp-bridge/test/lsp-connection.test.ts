@@ -64,6 +64,15 @@ afterEach(() => {
 })
 
 describe('requests', () => {
+  it('terminates an oversized server stream without throwing into the host process', async () => {
+    const { child, connection } = rig()
+    const pending = connection.request('textDocument/hover', {})
+    const rejected = expect(pending).rejects.toThrow(/oversized/)
+    child.stdout.write(Buffer.from('Content-Length: 999999999\r\n\r\n'))
+    await tick()
+    await rejected
+    expect(child.kills).toContain('SIGKILL')
+  })
   it('frames the request, resolves with the result and null for a missing one', async () => {
     const { child, connection } = rig()
     const first = connection.request('textDocument/hover', { a: 1 })

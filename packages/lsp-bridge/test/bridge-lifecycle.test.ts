@@ -76,6 +76,7 @@ async function startBridge(
   options: Partial<BridgeOptions> = {}
 ): Promise<{ bridge: Bridge; port: number }> {
   const bridge = createBridge({
+    trustedRoots: [base],
     port: 0,
     token: TOKEN,
     serverOverrides: {
@@ -528,6 +529,7 @@ describe('session lifecycle (fake server)', () => {
 
   it('reports a server that dies during startup, with its stderr', async () => {
     const bridge = createBridge({
+      trustedRoots: [base],
       port: 0,
       token: TOKEN,
       serverOverrides: {

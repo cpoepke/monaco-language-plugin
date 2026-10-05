@@ -28,6 +28,21 @@ describe('errnoCode', () => {
 })
 
 describe('json + hashing helpers', () => {
+  it.skipIf(process.platform === 'win32')(
+    'does not follow a planted predictable temporary symlink',
+    () => {
+      const dir = tmpDir()
+      const file = path.join(dir, 'state.json')
+      const victim = path.join(dir, 'victim')
+      nodeFs.writeFileSync(victim, 'unchanged')
+      nodeFs.symlinkSync(victim, `${file}.tmp-${process.pid}`)
+      writeJsonAtomic(file, { safe: true })
+      expect(nodeFs.readFileSync(victim, 'utf8')).toBe('unchanged')
+      expect(readJson(file)).toEqual({ safe: true })
+      expect(nodeFs.statSync(file).mode & 0o777).toBe(0o600)
+    }
+  )
+
   it('writeJsonAtomic leaves no temp file and creates parent directories', () => {
     const dir = tmpDir()
     const file = path.join(dir, 'a', 'b', 'x.json')

@@ -39,6 +39,7 @@ async function startBridge(
   overrides: Partial<BridgeOptions> = {}
 ): Promise<{ bridge: Bridge; port: number }> {
   const bridge = createBridge({
+    trustedRoots: [workspace],
     port: 0,
     token: TOKEN,
     serverOverrides: {
@@ -62,14 +63,15 @@ async function connect(port: number, hello = true): Promise<TestClient> {
 function upgradeStatus(
   port: number,
   token: string | null,
-  extraHeaders: Record<string, string> = {}
+  extraHeaders: Record<string, string> = {},
+  requestTarget?: string
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const path = token === null ? '/' : `/?token=${encodeURIComponent(token)}`
     const req = request({
       host: '127.0.0.1',
       port,
-      path,
+      path: requestTarget ?? path,
       headers: {
         ...extraHeaders,
         Connection: 'Upgrade',
@@ -100,6 +102,56 @@ async function expectRpcError(promise: Promise<unknown>, code: number): Promise<
 }
 
 describe('authentication', () => {
+  it('does not start a server until the workspace is explicitly trusted', async () => {
+    const { port, bridge } = await startBridge({ trustedRoots: undefined })
+    const client = await connect(port)
+    const result = await client.openDocument(join(workspace, 'src', 'a.ts'), 'typescript')
+    expect(result).toMatchObject({
+      sessionId: null,
+      reason: expect.stringContaining('not trusted')
+    })
+    expect(bridge.serverPids()).toEqual([])
+  })
+
+  it('fails closed when the workspace trust provider cannot answer', async () => {
+    const { port, bridge } = await startBridge({
+      trustedRoots: () => {
+        throw new Error('unavailable')
+      }
+    })
+    const client = await connect(port)
+    expect(await client.openDocument(join(workspace, 'src', 'a.ts'), 'typescript')).toMatchObject({
+      sessionId: null
+    })
+    expect(bridge.serverPids()).toEqual([])
+  })
+
+  it('does not delegate navigation outside allowed roots to a host', async () => {
+    let called = false
+    const { port } = await startBridge({
+      allowedRoots: [workspace],
+      hostNavigator: async () => {
+        called = true
+        return { opened: true }
+      }
+    })
+    const client = await connect(port)
+    await expectRpcError(
+      client.request(BridgeMethods.openLocation, {
+        uri: pathToFileURL(join(outsideDir, 'b.ts')).href,
+        range: { start: { line: 0, character: 0 } }
+      }),
+      JsonRpcErrorCodes.PathNotAllowed
+    )
+    expect(called).toBe(false)
+  })
+
+  it('rejects malformed upgrade URLs before authentication without crashing', async () => {
+    const { port } = await startBridge()
+    expect(await upgradeStatus(port, null, {}, 'http://[')).toBe(400)
+    expect(await upgradeStatus(port, TOKEN)).toBe(101)
+  })
+
   it('rejects upgrades without the right token with 401', async () => {
     const { port } = await startBridge()
     expect(await upgradeStatus(port, null)).toBe(401)

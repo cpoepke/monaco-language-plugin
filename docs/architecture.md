@@ -67,7 +67,12 @@ injected script wires them into Orca's editor.
   home directory or above it, and only existing local files (no UNC hosts) can be opened.
   Server binaries come from absolute `PATH` entries and fixed dirs and are spawned by absolute
   path; binaries in a project's `node_modules/.bin` run only when explicitly trusted
-  (`--trust-project-binaries`).
+  (`--trust-project-binaries`). Before starting any server, the detected workspace must
+  also be inside an explicitly configured `trustedRoots` entry (empty by default).
+  This separate execution permission is necessary because globally installed servers can
+  run workspace SDKs, build scripts and other project code. Orca reads its trust list from
+  the user's patcher state directory; `monaco-lsp-orca trust/untrust <directory>` edits it.
+  Restart Orca after changing trust to reconnect models and terminate existing servers.
 - **Results use the client's paths.** Servers see realpaths; result URIs under a symlinked root
   are rewritten back to the spelling the client opened the document with.
 - **Cancellation.** `lsp/cancel {id}` sends `$/cancelRequest` for the client's pending

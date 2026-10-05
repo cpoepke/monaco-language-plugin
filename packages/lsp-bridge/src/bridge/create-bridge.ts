@@ -61,7 +61,7 @@ export function createBridge(bridgeOptions: BridgeOptions): Bridge {
       bridgeVersion: BRIDGE_VERSION,
       clients: clients.size,
       sessions: sessions.status(),
-      servers: resolveAllServers(resolution)
+      servers: resolveAllServers({ ...resolution, probe: false })
     }
   }
 
@@ -162,7 +162,13 @@ export function createBridge(bridgeOptions: BridgeOptions): Bridge {
       rejectUpgrade(socket, '403 Forbidden')
       return
     }
-    const url = new URL(request.url ?? '/', 'http://localhost')
+    let url: URL
+    try {
+      url = new URL(request.url ?? '/', 'http://localhost')
+    } catch {
+      rejectUpgrade(socket, '400 Bad Request')
+      return
+    }
     if (!tokensEqual(options.token, url.searchParams.get('token'))) {
       log.warn('rejected connection with a bad token', { remote: request.socket.remoteAddress })
       rejectUpgrade(socket, '401 Unauthorized')

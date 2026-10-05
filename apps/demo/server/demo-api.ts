@@ -109,7 +109,18 @@ function startBridge(log: (message: string) => void): {
     const token = randomBytes(16).toString('hex')
     child = spawn(
       process.execPath,
-      [BRIDGE_CLI, '--port', String(port), '--token', token, '--root', FIXTURES_DIR, '--print-url'],
+      [
+        BRIDGE_CLI,
+        '--port',
+        String(port),
+        '--token',
+        token,
+        '--root',
+        FIXTURES_DIR,
+        '--trusted-root',
+        FIXTURES_DIR,
+        '--print-url'
+      ],
       { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] }
     )
     child.stderr?.on('data', (chunk: Buffer) => {
